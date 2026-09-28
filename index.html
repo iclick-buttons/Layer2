@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Layer2</title>
+<meta name="description" content="Independent non-custodial swap interface for PulseChain, routing through the public PulseX contracts.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#07060d; --bg2:#0e0b1c; --panel:rgba(22,18,40,.72); --panel-solid:#161228;
+    --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.14);
+    --text:#f2effa; --muted:#9a93b5; --dim:#6b6588;
+    --a1:#ff3d8b; --a2:#8b5cff; --a3:#22d3ee;
+    --ok:#34d399; --warn:#fbbf24; --bad:#f87171;
+    --radius:22px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;min-height:100%}
+  body{overflow-x:hidden}
+  button,input{font:inherit;color:inherit}
+  button{cursor:pointer;border:0;background:none}
+  a{color:var(--a3);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* backdrop */
+  .aura{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+  .aura i{position:absolute;border-radius:50%;filter:blur(90px);opacity:.55;animation:drift 22s ease-in-out infinite alternate}
+  .aura i:nth-child(1){width:520px;height:520px;background:var(--a2);top:-160px;left:-120px}
+  .aura i:nth-child(2){width:460px;height:460px;background:var(--a1);bottom:-180px;right:-100px;animation-delay:-8s}
+  .aura i:nth-child(3){width:340px;height:340px;background:var(--a3);top:40%;left:55%;opacity:.25;animation-delay:-14s}
+  @keyframes drift{to{transform:translate(60px,40px) scale(1.15)}}
+  .grid-bg{position:fixed;inset:0;z-index:0;pointer-events:none;
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:56px 56px;mask-image:radial-gradient(ellipse at 50% 30%,#000 20%,transparent 70%);opacity:.5}
+
+  /* layout */
+  header{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;padding:18px 28px;gap:12px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:"Space Grotesk";font-weight:700;font-size:20px;letter-spacing:-.02em}
+  .logo{width:34px;height:34px;border-radius:50%;background:conic-gradient(from 200deg,var(--a1),var(--a2),var(--a3),var(--a1));
+    display:grid;place-items:center;box-shadow:0 0 24px rgba(139,92,255,.6)}
+  .logo::after{content:"";width:18px;height:18px;border-radius:50%;background:var(--bg)}
+  .hdr-right{display:flex;gap:10px;align-items:center}
+  .chip{display:flex;align-items:center;gap:8px;padding:9px 14px;border-radius:999px;background:var(--panel);border:1px solid var(--line);font-size:14px;font-weight:500;backdrop-filter:blur(12px)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+  .dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+  .dot.bad{background:var(--bad);box-shadow:0 0 10px var(--bad)}
+  .btn-grad{background:linear-gradient(135deg,var(--a1),var(--a2));color:#fff;font-weight:600;border-radius:999px;padding:10px 18px;box-shadow:0 6px 24px rgba(255,61,139,.3);transition:transform .15s,box-shadow .15s}
+  .btn-grad:hover{transform:translateY(-1px);box-shadow:0 10px 30px rgba(255,61,139,.45)}
+  .btn-grad:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none;background:#3a3456}
+
+  main{position:relative;z-index:1;display:grid;grid-template-columns:minmax(0,1fr) 460px minmax(0,1fr);gap:24px;padding:12px 28px 60px;max-width:1400px;margin:0 auto;align-items:start}
+  .col-left,.col-right{display:flex;flex-direction:column;gap:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);backdrop-filter:blur(18px);padding:18px}
+  .card h3{font-family:"Space Grotesk";font-size:15px;font-weight:600;letter-spacing:.02em;color:var(--muted);text-transform:uppercase;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+
+  /* swap card */
+  .swap{padding:10px;position:relative;overflow:hidden}
+  .swap::before{content:"";position:absolute;inset:-1px;border-radius:var(--radius);padding:1px;
+    background:linear-gradient(135deg,rgba(255,61,139,.6),rgba(139,92,255,.3),rgba(34,211,238,.5));
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none}
+  .swap-top{display:flex;justify-content:space-between;align-items:center;padding:8px 10px 12px}
+  .swap-top h2{font-family:"Space Grotesk";font-size:22px}
+  .icon-btn{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;color:var(--muted);transition:.15s}
+  .icon-btn:hover{background:rgba(255,255,255,.06);color:var(--text)}
+  .field{background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:18px;padding:16px;transition:border-color .15s}
+  .field:focus-within{border-color:var(--line2)}
+  .field-row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .field-label{font-size:13px;color:var(--muted);margin-bottom:8px;display:flex;justify-content:space-between}
+  .amt{background:none;border:0;outline:0;font-family:"Space Grotesk";font-size:34px;font-weight:600;width:100%;min-width:0}
+  .amt::placeholder{color:var(--dim)}
+  .tok-btn{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.07);border:1px solid var(--line);padding:6px 12px 6px 6px;border-radius:999px;font-weight:600;white-space:nowrap;transition:.15s}
+  .tok-btn:hover{background:rgba(255,255,255,.12)}
+  .tok-ico{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;flex:none;font-family:"Space Grotesk"}
+  .sub{font-size:13px;color:var(--muted);margin-top:8px;display:flex;justify-content:space-between;min-height:18px}
+  .max{color:var(--a1);font-weight:600;font-size:12px;margin-left:6px;padding:2px 6px;border-radius:6px;background:rgba(255,61,139,.12)}
+  .flip-wrap{height:8px;position:relative;z-index:2}
+  .flip{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:42px;height:42px;border-radius:14px;background:var(--panel-solid);border:4px solid #0d0a1a;display:grid;place-items:center;color:var(--muted);transition:transform .25s,color .15s}
+  .flip:hover{color:var(--text);transform:translate(-50%,-50%) rotate(180deg)}
+  .details{margin:10px 4px 4px;font-size:13px;color:var(--muted);display:none;flex-direction:column;gap:7px;padding:12px 12px 4px}
+  .details.show{display:flex}
+  .details div{display:flex;justify-content:space-between;gap:10px}
+  .details b{color:var(--text);font-weight:500;text-align:right}
+  .main-btn{width:100%;margin-top:10px;padding:18px;border-radius:18px;font-size:17px;font-family:"Space Grotesk"}
+
+  /* settings */
+  .settings{display:none;margin:0 6px 10px;padding:14px;border-radius:16px;background:rgba(0,0,0,.3);border:1px solid var(--line);font-size:13px}
+  .settings.show{display:block}
+  .seg{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .seg button,.seg input{padding:7px 12px;border-radius:10px;background:rgba(255,255,255,.06);border:1px solid var(--line);font-size:13px}
+  .seg button.on{background:rgba(139,92,255,.3);border-color:var(--a2)}
+  .seg input{width:80px;outline:0}
+
+  /* lists */
+  .notice{padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid var(--line);margin-bottom:10px}
+  .notice:last-child{margin-bottom:0}
+  .notice strong{display:block;font-size:14px;margin-bottom:4px}
+  .notice p{font-size:13px;color:var(--muted);line-height:1.5}
+  .notice .when{font-size:11px;color:var(--dim);margin-top:6px}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .row .grow{flex:1;min-width:0}
+  .row .sym{font-weight:600;font-size:14px}
+  .row .nm{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .val{font-family:"Space Grotesk";font-weight:500;text-align:right;font-size:14px}
+  .empty{font-size:13px;color:var(--dim);padding:8px 4px}
+  .trust li{list-style:none;display:flex;gap:10px;font-size:13px;color:var(--muted);padding:6px 0;line-height:1.45}
+  .trust li::before{content:"✓";color:var(--ok);font-weight:700}
+  .addr{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .tx{font-size:13px}
+  .tx .st{font-size:11px;padding:2px 8px;border-radius:999px}
+  .st.pending{background:rgba(251,191,36,.15);color:var(--warn)}
+  .st.ok{background:rgba(52,211,153,.15);color:var(--ok)}
+  .st.fail{background:rgba(248,113,113,.15);color:var(--bad)}
+
+  /* modal */
+  .scrim{position:fixed;inset:0;background:rgba(4,3,10,.7);backdrop-filter:blur(6px);z-index:50;display:none;align-items:center;justify-content:center;padding:16px}
+  .scrim.show{display:flex}
+  .modal{width:100%;max-width:440px;max-height:86vh;display:flex;flex-direction:column;background:#120f22;border:1px solid var(--line2);border-radius:24px;padding:20px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+  .modal-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  .modal-hd h3{font-family:"Space Grotesk";font-size:19px}
+  .search{width:100%;padding:13px 14px;border-radius:14px;background:rgba(0,0,0,.35);border:1px solid var(--line);outline:0;margin-bottom:12px}
+  .search:focus{border-color:var(--a2)}
+  .tok-list{overflow-y:auto;margin:0 -8px;padding:0 8px}
+  .tok-item{display:flex;align-items:center;gap:12px;padding:10px;border-radius:14px;width:100%;text-align:left}
+  .tok-item:hover{background:rgba(255,255,255,.05)}
+  .tok-item.sel{opacity:.4;pointer-events:none}
+  .tag{font-size:10px;padding:2px 6px;border-radius:6px;background:rgba(251,191,36,.15);color:var(--warn);margin-left:6px;font-weight:600}
+  .warnbox{padding:12px;border-radius:14px;font-size:13px;line-height:1.5;margin:10px 0}
+  .warnbox.w{background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);color:#fde68a}
+  .warnbox.b{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.35);color:#fecaca}
+  .review-big{display:flex;justify-content:space-between;align-items:center;padding:14px;border-radius:16px;background:rgba(0,0,0,.3);margin-bottom:8px}
+  .review-big .n{font-family:"Space Grotesk";font-size:24px;font-weight:600}
+  .kv{display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--muted);margin:12px 2px}
+  .kv div{display:flex;justify-content:space-between;gap:12px}
+  .kv b{color:var(--text);font-weight:500;text-align:right;word-break:break-all}
+  label.ack{display:flex;gap:8px;font-size:13px;color:#fecaca;align-items:flex-start;margin-bottom:6px}
+
+  input[type=range]{width:100%;accent-color:var(--a1);margin:10px 0}
+
+  /* tabs + pools */
+  .tabs{display:flex;gap:4px;background:rgba(0,0,0,.3);padding:4px;border-radius:14px}
+  .tabs button{padding:8px 18px;border-radius:10px;font-family:"Space Grotesk";font-weight:600;font-size:16px;color:var(--muted);transition:.15s}
+  .tabs button.on{background:rgba(255,255,255,.1);color:var(--text)}
+  .pos{border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:10px;background:rgba(0,0,0,.25)}
+  .pos-hd{display:flex;align-items:center;gap:10px;font-size:15px}
+  .pair-ico{display:flex}
+  .pair-ico .tok-ico+.tok-ico{margin-left:-10px;box-shadow:0 0 0 2px #120f22}
+  .pos-grid{display:grid;grid-template-columns:1fr auto;gap:6px 12px;font-size:13px;color:var(--muted);margin:12px 0}
+  .pos-grid b{color:var(--text);font-weight:500;text-align:right}
+  .pos-actions{display:flex;gap:8px}
+  .btn-ghost{flex:1;padding:10px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid var(--line);font-weight:600;transition:.15s}
+  .btn-ghost:hover{background:rgba(255,255,255,.11)}
+  .pill{font-size:11px;padding:2px 7px;border-radius:6px;background:rgba(139,92,255,.2);color:#c4b5fd;font-weight:600}
+  .plus{text-align:center;color:var(--dim);font-size:20px;line-height:1;margin:6px 0}
+  .lp-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 4px 12px}
+  .lp-hd b{font-family:"Space Grotesk";font-size:17px;flex:1}
+  .rm-pct{font-family:"Space Grotesk";font-size:44px;font-weight:700}
+  .views{padding:0 0 2px}
+
+  /* toast */
+  .toasts{position:fixed;right:18px;bottom:18px;z-index:60;display:flex;flex-direction:column;gap:10px;max-width:360px}
+  .toast{background:#1a1530;border:1px solid var(--line2);border-radius:14px;padding:12px 14px;font-size:14px;box-shadow:0 12px 30px rgba(0,0,0,.5);animation:up .25s ease}
+  .toast.ok{border-color:rgba(52,211,153,.5)} .toast.err{border-color:rgba(248,113,113,.5)}
+  @keyframes up{from{transform:translateY(10px);opacity:0}}
+
+  footer{position:relative;z-index:1;text-align:center;font-size:12px;color:var(--dim);padding:0 20px 30px;line-height:1.6}
+
+  .spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:rot .7s linear infinite;display:inline-block;vertical-align:-2px}
+  @keyframes rot{to{transform:rotate(360deg)}}
+
+  @media (max-width:1180px){
+    main{grid-template-columns:1fr;max-width:520px}
+    .col-center{order:-1}
+  }
+  @media (max-width:520px){
+    header{padding:14px 16px}
+    main{padding:8px 16px 40px}
+    .brand span{display:none}
+    .amt{font-size:28px}
+    #netChip{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="aura"><i></i><i></i><i></i></div>
+<div class="grid-bg"></div>
+
+<header>
+  <div class="brand"><div class="logo"></div><span id="appName">Layer2</span></div>
+  <div class="hdr-right">
+    <div class="chip" id="netChip"><span class="dot" id="netDot"></span><span id="netLabel">PulseChain</span></div>
+    <button class="btn-grad" id="connectBtn">Connect wallet</button>
+  </div>
+</header>
+
+<main>
+  <!-- LEFT: notices + trust -->
+  <section class="col-left">
+    <div class="card">
+      <h3>Updates</h3>
+      <div id="notices"></div>
+    </div>
+    <div class="card">
+      <h3>How your wallet stays safe</h3>
+      <ul class="trust">
+        <li>No custody. Tokens go straight from your wallet to the PulseX router and back to your wallet.</li>
+        <li>Nothing moves unless you approve it in your own wallet.</li>
+        <li>Approvals are for the exact trade amount only, never unlimited.</li>
+        <li>Every swap is checked to be on PulseChain (chain 369) before it's sent.</li>
+        <li>No server, no tracking. This page is a single file you can read in full.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- CENTER: swap -->
+  <section class="col-center">
+    <div class="card swap">
+      <div class="swap-top">
+        <div class="tabs" id="tabs"><button data-tab="swap" class="on">Swap</button><button data-tab="pools">Pools</button></div>
+        <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+
+      <div class="settings" id="settings">
+        <div>Max slippage</div>
+        <div class="seg" id="slipSeg">
+          <button data-bps="10">0.1%</button><button data-bps="50">0.5%</button><button data-bps="100">1%</button><button data-bps="300">3%</button>
+          <input id="slipCustom" placeholder="Custom %" inputmode="decimal">
+        </div>
+        <div style="margin-top:12px">Transaction deadline: <b id="deadlineLbl"></b> minutes</div>
+      </div>
+
+      <div id="swapView">
+      <div class="field">
+        <div class="field-label"><span>You pay</span></div>
+        <div class="field-row">
+          <input class="amt" id="amtIn" placeholder="0" inputmode="decimal" autocomplete="off">
+          <button class="tok-btn" id="fromBtn"></button>
+        </div>
+        <div class="sub"><span id="rateLine"></span><span id="fromBal"></span></div>
+      </div>
+
+      <div class="flip-wrap"><button class="flip" id="flipBtn" aria-label="Switch tokens">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M7 4v16M7 20l-4-4M7 20l4-4M17 20V4M17 4l-4 4M17 4l4 4"/></svg>
+      </button></div>
+
+      <div class="field">
+        <div class="field-label"><span>You receive</span></div>
+        <div class="field-row">
+          <input class="amt" id="amtOut" placeholder="0" readonly>
+          <button class="tok-btn" id="toBtn"></button>
+        </div>
+        <div class="sub"><span></span><span id="toBal"></span></div>
+      </div>
+
+      <div class="details" id="details">
+        <div><span>Rate</span><b id="dRate"></b></div>
+        <div><span>Price impact</span><b id="dImpact"></b></div>
+        <div><span>Minimum received</span><b id="dMin"></b></div>
+        <div><span>Route</span><b id="dRoute"></b></div>
+        <div><span>Routes compared</span><b id="dChecked"></b></div>
+        <div id="dGainRow"><span>vs. direct route</span><b id="dGain" style="color:var(--ok)"></b></div>
+        <div id="dAlts" style="flex-direction:column;gap:4px;margin-top:4px"></div>
+      </div>
+
+      <button class="btn-grad main-btn" id="mainBtn">Connect wallet</button>
+      </div>
+
+      <div id="poolsView" style="display:none">
+        <div id="poolHome">
+          <div id="poolList"></div>
+          <button class="btn-grad main-btn" id="newPosBtn">+ Add liquidity</button>
+          <div class="empty" style="text-align:center;margin-top:8px">Don't see a pool you're in? Open "Add liquidity" and pick its two tokens, and it will show up here.</div>
+        </div>
+        <div id="addPanel" style="display:none">
+          <div class="lp-hd">
+            <button class="icon-btn" id="addBack" aria-label="Back">←</button><b>Add liquidity</b>
+            <div class="seg" id="verSeg" style="margin:0"><button data-v="0">V2</button><button data-v="1">V1</button></div>
+          </div>
+          <div class="field">
+            <div class="field-row"><input class="amt" id="lpAmtA" placeholder="0" inputmode="decimal" autocomplete="off"><button class="tok-btn" id="lpABtn"></button></div>
+            <div class="sub"><span></span><span id="lpBalA"></span></div>
+          </div>
+          <div class="plus">+</div>
+          <div class="field">
+            <div class="field-row"><input class="amt" id="lpAmtB" placeholder="0" inputmode="decimal" autocomplete="off"><button class="tok-btn" id="lpBBtn"></button></div>
+            <div class="sub"><span></span><span id="lpBalB"></span></div>
+          </div>
+          <div id="lpInfo"></div>
+          <button class="btn-grad main-btn" id="lpAddBtn">Add liquidity</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: portfolio + activity + contracts -->
+  <section class="col-right">
+    <div class="card">
+      <h3>Your balances <button class="icon-btn" id="refreshBtn" title="Refresh" style="width:28px;height:28px">↻</button></h3>
+      <div id="portfolio"><div class="empty">Connect a wallet to see balances.</div></div>
+    </div>
+    <div class="card">
+      <h3>Activity</h3>
+      <div id="activity"><div class="empty">Your transactions from this session appear here.</div></div>
+    </div>
+    <div class="card">
+      <h3>Contracts used</h3>
+      <div id="contracts"></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Independent interface, not affiliated with PulseX. Trades execute directly on the public PulseX router contracts on PulseChain.<br>
+  Crypto trading carries risk. Always check what your wallet asks you to sign.
+</footer>
+
+<!-- token picker -->
+<div class="scrim" id="pickScrim">
+  <div class="modal">
+    <div class="modal-hd"><h3>Select a token</h3><button class="icon-btn" data-close="pickScrim">✕</button></div>
+    <input class="search" id="tokSearch" placeholder="Search name or paste address">
+    <div id="importBox"></div>
+    <div class="tok-list" id="tokList"></div>
+  </div>
+</div>
+
+<!-- review -->
+<div class="scrim" id="reviewScrim">
+  <div class="modal">
+    <div class="modal-hd"><h3>Review swap</h3><button class="icon-btn" data-close="reviewScrim">✕</button></div>
+    <div id="reviewBody"></div>
+    <button class="btn-grad main-btn" id="confirmBtn">Confirm in wallet</button>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<!-- remove liquidity -->
+<div class="scrim" id="removeScrim">
+  <div class="modal">
+    <div class="modal-hd"><h3 id="rmTitle">Remove liquidity</h3><button class="icon-btn" data-close="removeScrim">✕</button></div>
+    <div style="overflow-y:auto">
+      <div class="rm-pct" id="rmPct">50%</div>
+      <input type="range" id="rmRange" min="1" max="100" value="50">
+      <div class="seg" id="rmSeg" style="margin-bottom:12px"><button data-p="25">25%</button><button data-p="50">50%</button><button data-p="75">75%</button><button data-p="100">Max</button></div>
+      <div class="review-big" id="rmOut0"></div>
+      <div class="review-big" id="rmOut1"></div>
+      <label class="ack" id="rmPlsRow" style="color:var(--muted)"><input type="checkbox" id="rmAsPls" checked> Receive PLS instead of WPLS</label>
+      <div class="kv" id="rmKv"></div>
+    </div>
+    <button class="btn-grad main-btn" id="rmBtn">Remove liquidity</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+<script>
+/* =====================================================================
+   CONFIG — edit this block to update the app's info
+   ===================================================================== */
+const CONFIG = {
+  appName: "Layer2",
+  chainId: 369,
+  chainHex: "0x171",
+  chainName: "PulseChain",
+  rpc: "https://rpc.pulsechain.com",
+  explorer: "https://scan.pulsechain.com",
+  deadlineMinutes: 20,
+  defaultSlippageBps: 50,          // 50 = 0.5%
+  blockImpactPct: 15,              // price impact above this needs an explicit checkbox
+
+  // Official PulseX routers (quotes are compared across both, best one wins)
+  routers: [
+    { label: "PulseX V2", address: "0x165C3410fC91EF562C50559f7d2289fEbed552d9", factory: "0x29eA7545DEf87022BAdc76323F373EA1e707C523" },
+    { label: "PulseX V1", address: "0x98bf93ebf5c380C0e6Ae8e192A7e2AE08edAcc02", factory: "0x1715a3E4A142d8b698131108995174F37aEBA10D" },
+  ],
+  explorerApi: "https://api.scan.pulsechain.com/api/v2",   // used to find which pool tokens a wallet holds
+  WPLS: "0xA1077a294dDE1B09bB078844df40758a5D0f9a27",
+
+  // Tokens shown by default. Add more: { symbol, name, address, decimals, color }
+  tokens: [
+    { symbol: "PLS",  name: "Pulse (native)", address: "native", decimals: 18, color: "#8b5cff" },
+    { symbol: "WPLS", name: "Wrapped Pulse",  address: "0xA1077a294dDE1B09bB078844df40758a5D0f9a27", decimals: 18, color: "#6d44e8" },
+    { symbol: "PLSX", name: "PulseX",         address: "0x95B303987A60C71504D99Aa1b13B4DA07b0790ab", decimals: 18, color: "#ff3d8b" },
+    { symbol: "INC",  name: "Incentive",      address: "0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d", decimals: 18, color: "#22c55e" },
+    { symbol: "HEX",  name: "HEX",            address: "0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39", decimals: 8,  color: "#f59e0b" },
+    { symbol: "DAI",  name: "DAI from Ethereum",  address: "0xefD766cCb38EaF1dfd701853BFCe31359239F305", decimals: 18, color: "#f4b731" },
+    { symbol: "USDC", name: "USDC from Ethereum", address: "0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07", decimals: 6,  color: "#2775ca" },
+    { symbol: "USDT", name: "USDT from Ethereum", address: "0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f", decimals: 6,  color: "#26a17b" },
+    { symbol: "WETH", name: "WETH from Ethereum", address: "0x02DcdD04e3F455D838cd1249292C58f3B79e3C3C", decimals: 18, color: "#627eea" },
+  ],
+
+  // Intermediate tokens the router may pass through. Every route with up to
+  // `maxHops` of these in between is quoted on every router, and the best wins.
+  hops: [
+    "0xA1077a294dDE1B09bB078844df40758a5D0f9a27", // WPLS
+    "0x95B303987A60C71504D99Aa1b13B4DA07b0790ab", // PLSX
+    "0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d", // INC
+    "0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39", // HEX
+    "0xefD766cCb38EaF1dfd701853BFCe31359239F305", // DAI
+    "0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07", // USDC
+    "0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f", // USDT
+    "0x02DcdD04e3F455D838cd1249292C58f3B79e3C3C", // WETH
+  ],
+  maxHops: 2,              // 0 = direct only, 1 = one middle token, 2 = two middle tokens
+  hopPenaltyBps: 3,        // each extra hop must win by >0.03% to cover its extra gas
+  multicall: "0xcA11bde05977b3631167028862bE2a173976CA11", // Multicall3, batches all quotes into one request
+
+  // Live pool discovery: finds every pool the two tokens trade in (including small/new coins)
+  // and adds routes through them. Falls back to the fixed `hops` list if the index is down.
+  discovery: {
+    enabled: true,
+    subgraphs: [
+      "https://graph.pulsechain.com/subgraphs/name/pulsechain/pulsexv2",
+      "https://graph.pulsechain.com/subgraphs/name/pulsechain/pulsex",
+    ],
+    pairsPerToken: 40,     // pools looked up per side (largest first)
+    minPoolUsd: 100,       // ignore pools with less liquidity than this
+    twoHopWidth: 10,       // for two-middle routes, top N neighbours of each side are combined
+  },
+
+  // Your updates panel — replace with your own info
+  notices: [
+    { title: "Welcome", body: "This is a cleaner interface for swapping on PulseX. Send in your updates and they'll show here.", when: "Sep 2026" },
+  ],
+};
+
+/* ===================================================================== */
+const { ethers } = window;
+const $ = id => document.getElementById(id);
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function allowance(address,address) view returns (uint256)",
+  "function approve(address,uint256) returns (bool)",
+  "function decimals() view returns (uint8)",
+  "function symbol() view returns (string)",
+  "function name() view returns (string)",
+];
+const ROUTER_ABI = [
+  "function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)",
+  "function swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline) payable",
+  "function swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+  "function swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+];
+const WPLS_ABI = ["function deposit() payable", "function withdraw(uint256)"];
+const MC_ABI = ["function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[] returnData)"];
+const routerIface = new ethers.Interface(ROUTER_ABI);
+
+const read = new ethers.JsonRpcProvider(CONFIG.rpc, CONFIG.chainId, { staticNetwork: true });
+
+const S = {
+  tokens: [...CONFIG.tokens],
+  from: null, to: null,
+  account: null, chainOk: false, walletProvider: null,
+  balances: {},
+  slipBps: CONFIG.defaultSlippageBps,
+  amountIn: 0n, quote: null, quoting: false, quoteErr: null, seq: 0,
+  pickSide: null, busy: false, history: [],
+};
+S.from = S.tokens[0]; S.to = S.tokens[2];
+
+// restore custom tokens (per-browser convenience)
+try { const c = JSON.parse(localStorage.getItem("halo.custom") || "[]"); c.forEach(t => { if (!findTok(t.address)) S.tokens.push({ ...t, custom: true }); }); } catch {}
+
+/* ---------- helpers ---------- */
+function findTok(addr){ return S.tokens.find(t => t.address.toLowerCase() === String(addr).toLowerCase()); }
+function pathAddr(t){ return t.address === "native" ? CONFIG.WPLS : t.address; }
+function isWrap(a, b){ const s = new Set([a.address.toLowerCase(), b.address.toLowerCase()]); return s.has("native") && s.has(CONFIG.WPLS.toLowerCase()); }
+function short(a){ return a.slice(0, 6) + "…" + a.slice(-4); }
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+function fmt(v, dec, maxFrac = 6){
+  if (v == null) return "—";
+  const s = ethers.formatUnits(v, dec);
+  let [i, f = ""] = s.split(".");
+  const iv = BigInt(i);
+  if (iv >= 1000000n) maxFrac = 0; else if (iv >= 1000n) maxFrac = Math.min(maxFrac, 2);
+  f = f.slice(0, maxFrac).replace(/0+$/, "");
+  if (iv === 0n && !f && v > 0n) return "<0." + "0".repeat(maxFrac - 1) + "1";
+  return iv.toLocaleString("en-US") + (f ? "." + f : "");
+}
+function color(t){
+  if (t.color) return t.color;
+  let h = 0; for (const c of t.address) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return `hsl(${h} 70% 55%)`;
+}
+function icon(t, size = 28){
+  return `<span class="tok-ico" style="width:${size}px;height:${size}px;background:linear-gradient(135deg,${color(t)},#1b1530)">${esc(t.symbol.slice(0, 2))}</span>`;
+}
+function toast(msg, kind = "", link){
+  const el = document.createElement("div");
+  el.className = "toast " + kind;
+  el.innerHTML = esc(msg) + (link ? ` <a href="${link}" target="_blank" rel="noopener">View ↗</a>` : "");
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), 7000);
+}
+function errMsg(e){
+  if (e?.code === "ACTION_REJECTED" || e?.code === 4001 || e?.info?.error?.code === 4001) return "You rejected the request in your wallet.";
+  return e?.shortMessage || e?.reason || e?.message || "Something went wrong.";
+}
+async function balOf(t, who){
+  if (t.address === "native") return read.getBalance(who);
+  return new ethers.Contract(t.address, ERC20_ABI, read).balanceOf(who);
+}
+
+/* ---------- wallet ---------- */
+async function connect(){
+  if (!window.ethereum) { toast("No wallet found. Open this page in your wallet's browser or install a wallet extension.", "err"); return; }
+  try {
+    const accts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    S.account = ethers.getAddress(accts[0]);
+    await checkChain();
+    if (!S.chainOk) await switchChain();
+    await refreshBalances();
+  } catch (e) { toast(errMsg(e), "err"); }
+  render();
+}
+async function checkChain(){
+  if (!window.ethereum) return;
+  const id = await window.ethereum.request({ method: "eth_chainId" });
+  S.chainOk = parseInt(id, 16) === CONFIG.chainId;
+  S.walletProvider = new ethers.BrowserProvider(window.ethereum);
+}
+async function switchChain(){
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CONFIG.chainHex }] });
+  } catch (e) {
+    if (e.code === 4902 || e?.data?.originalError?.code === 4902) {
+      await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{
+        chainId: CONFIG.chainHex, chainName: CONFIG.chainName,
+        nativeCurrency: { name: "Pulse", symbol: "PLS", decimals: 18 },
+        rpcUrls: [CONFIG.rpc], blockExplorerUrls: [CONFIG.explorer],
+      }]});
+    } else { toast(errMsg(e), "err"); }
+  }
+  await checkChain(); render();
+}
+if (window.ethereum?.on) {
+  window.ethereum.on("accountsChanged", a => { S.account = a[0] ? ethers.getAddress(a[0]) : null; S.balances = {}; S.positions = null; S.lpBal = {}; refreshBalances(); render(); if (S.tab === "pools") renderPools(); });
+  window.ethereum.on("chainChanged", async () => { await checkChain(); render(); });
+}
+// silently restore an existing connection (no popup)
+(async () => {
+  if (!window.ethereum) return;
+  try {
+    const a = await window.ethereum.request({ method: "eth_accounts" });
+    if (a[0]) { S.account = ethers.getAddress(a[0]); await checkChain(); await refreshBalances(); render(); }
+  } catch {}
+})();
+
+async function refreshBalances(){
+  if (!S.account) { renderPortfolio(); return; }
+  const who = S.account;
+  await Promise.all(S.tokens.map(async t => {
+    try { S.balances[t.address.toLowerCase()] = await balOf(t, who); } catch {}
+  }));
+  if (who === S.account) { render(); renderPortfolio(); loadPositions(); }
+}
+const bal = t => S.balances[t.address.toLowerCase()];
+
+/* ---------- quoting ---------- */
+const eq = (x, y) => x.toLowerCase() === y.toLowerCase();
+const META = {};              // symbols of tokens discovered through pool lookup
+const discCache = new Map();  // "a|b" -> { at, paths }
+function isKnown(addr){
+  return CONFIG.hops.some(h => eq(h, addr)) || CONFIG.tokens.some(t => t.address !== "native" && eq(t.address, addr));
+}
+async function neighbours(url, addr){
+  const d = CONFIG.discovery, a = addr.toLowerCase();
+  const query = `query($a:String!,$n:Int!,$m:BigDecimal!){
+    x: pairs(first:$n, orderBy:reserveUSD, orderDirection:desc, where:{token0:$a, reserveUSD_gt:$m}){ reserveUSD token1{ id symbol } }
+    y: pairs(first:$n, orderBy:reserveUSD, orderDirection:desc, where:{token1:$a, reserveUSD_gt:$m}){ reserveUSD token0{ id symbol } }
+  }`;
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000);
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, signal: ctl.signal,
+      body: JSON.stringify({ query, variables: { a, n: d.pairsPerToken, m: String(d.minPoolUsd) } }) });
+    const j = await r.json();
+    const list = [...(j.data?.x || []).map(p => ({ ...p.token1, liq: +p.reserveUSD })), ...(j.data?.y || []).map(p => ({ ...p.token0, liq: +p.reserveUSD }))];
+    list.forEach(n => { if (!META[n.id]) META[n.id] = n.symbol; });
+    return list;
+  } catch { return []; } finally { clearTimeout(t); }
+}
+async function discoveredPaths(A, B){
+  const d = CONFIG.discovery; if (!d?.enabled) return [];
+  const key = (A + "|" + B).toLowerCase(), hit = discCache.get(key);
+  if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.paths;
+  const merge = lists => { const m = new Map(); lists.flat().forEach(n => { const k = n.id.toLowerCase(); if (!m.has(k) || m.get(k).liq < n.liq) m.set(k, n); }); return m; };
+  const [na, nb] = await Promise.all([A, B].map(async x => merge(await Promise.all(d.subgraphs.map(u => neighbours(u, x))))));
+  const skip = k => eq(k, A) || eq(k, B);
+  const paths = [];
+  // one middle token: anything both sides trade against
+  for (const [k] of na) if (!skip(k) && nb.has(k)) paths.push([A, ethers.getAddress(k), B]);
+  // two middle tokens: strongest neighbours of each side (pairs that don't exist simply fail to quote)
+  const top = m => [...m.values()].filter(n => !skip(n.id)).sort((x, y) => y.liq - x.liq).slice(0, d.twoHopWidth).map(n => ethers.getAddress(n.id));
+  if (CONFIG.maxHops >= 2) for (const h1 of top(na)) for (const h2 of top(nb)) if (!eq(h1, h2)) paths.push([A, h1, h2, B]);
+  discCache.set(key, { at: Date.now(), paths });
+  return paths;
+}
+function symOf(addr){ return findTok(addr)?.symbol || META[addr.toLowerCase()] || short(addr); }
+function candidatePaths(a, b){
+  const A = pathAddr(a), B = pathAddr(b);
+  const mids = CONFIG.hops.filter(h => !eq(h, A) && !eq(h, B));
+  const paths = [[A, B]];
+  if (CONFIG.maxHops >= 1) for (const h of mids) paths.push([A, h, B]);
+  if (CONFIG.maxHops >= 2) for (const h1 of mids) for (const h2 of mids) if (!eq(h1, h2)) paths.push([A, h1, h2, B]);
+  return paths;
+}
+// Quote many (router, path, amount) jobs in as few RPC requests as possible.
+async function quoteMany(jobs){
+  const out = new Array(jobs.length).fill(null);
+  const CHUNK = 80, mc = new ethers.Contract(CONFIG.multicall, MC_ABI, read);
+  const starts = []; for (let i = 0; i < jobs.length; i += CHUNK) starts.push(i);
+  await Promise.all(starts.map(async start => {
+    const slice = jobs.slice(start, start + CHUNK);
+    try {
+      const res = await mc.aggregate3.staticCall(slice.map(j => ({
+        target: j.router.address, allowFailure: true,
+        callData: routerIface.encodeFunctionData("getAmountsOut", [j.amt, j.path]),
+      })));
+      res.forEach((r, i) => {
+        if (!r.success) return;
+        try { const a = routerIface.decodeFunctionResult("getAmountsOut", r.returnData)[0]; out[start + i] = a[a.length - 1]; } catch {}
+      });
+    } catch {
+      // fallback: one call per route
+      await Promise.all(slice.map(async (j, i) => {
+        try { const a = await new ethers.Contract(j.router.address, ROUTER_ABI, read).getAmountsOut(j.amt, j.path); out[start + i] = a[a.length - 1]; } catch {}
+      }));
+    }
+  }));
+  return out;
+}
+async function getQuote(a, b, amt){
+  if (isWrap(a, b)) return { wrap: true, out: amt, impact: 0, path: [], router: null, checked: 1, alts: [] };
+  const jobs = [];
+  const A = pathAddr(a), B = pathAddr(b);
+  const seen = new Set(), paths = [];
+  for (const p of [...candidatePaths(a, b), ...(await discoveredPaths(A, B))]) {
+    const k = p.join().toLowerCase(); if (!seen.has(k)) { seen.add(k); paths.push(p); }
+  }
+  for (const r of CONFIG.routers) for (const p of paths) jobs.push({ router: r, path: p, amt });
+  const outs = await quoteMany(jobs);
+  const results = jobs.map((j, i) => ({ router: j.router, path: j.path, out: outs[i], unlisted: j.path.slice(1, -1).filter(x => !isKnown(x)) })).filter(r => r.out && r.out > 0n);
+  if (!results.length) return null;
+  // score = output minus a small per-hop allowance for extra gas
+  const score = r => r.out * BigInt(10000 - CONFIG.hopPenaltyBps * (r.path.length - 2)) / 10000n;
+  results.sort((x, y) => { const d = score(y) - score(x); return d > 0n ? 1 : d < 0n ? -1 : 0; });
+  const best = results[0];
+  const direct = results.filter(r => r.path.length === 2).sort((x, y) => (y.out > x.out ? 1 : -1))[0];
+  const gainVsDirect = direct && direct !== best && direct.out > 0n ? Number((best.out - direct.out) * 1000000n / direct.out) / 10000 : null;
+  // price impact: compare against a tiny trade on the same route
+  let impact = null;
+  let small = amt / 10000n; if (small === 0n) small = 1n;
+  const [outSmall] = await quoteMany([{ router: best.router, path: best.path, amt: small }]);
+  if (outSmall && outSmall > 0n) {
+    const ratio = Number((best.out * small * 1000000n) / (outSmall * amt)) / 1e6;
+    impact = Math.max(0, (1 - ratio) * 100);
+  }
+  return { ...best, impact, checked: jobs.length, found: results.length, alts: results.slice(1, 6), gainVsDirect };
+}
+function routeLabel(r){ return r.path.map(symOf).join(" → "); }
+let qTimer;
+function scheduleQuote(){
+  clearTimeout(qTimer);
+  S.quote = null; S.quoteErr = null;
+  if (S.amountIn === 0n || S.from.address === S.to.address) { S.quoting = false; render(); return; }
+  S.quoting = true; render();
+  const seq = ++S.seq;
+  qTimer = setTimeout(async () => {
+    try {
+      const q = await getQuote(S.from, S.to, S.amountIn);
+      if (seq !== S.seq) return;
+      S.quote = q; if (!q) S.quoteErr = "No liquidity route";
+    } catch (e) { if (seq === S.seq) S.quoteErr = "Quote failed"; }
+    if (seq === S.seq) { S.quoting = false; render(); }
+  }, 350);
+}
+setInterval(() => { if (S.amountIn > 0n && !S.busy && !$("reviewScrim").classList.contains("show")) scheduleQuote(); }, 20000);
+
+/* ---------- input ---------- */
+$("amtIn").addEventListener("input", e => {
+  let v = e.target.value.replace(/,/g, ".").replace(/[^0-9.]/g, "");
+  const parts = v.split(".");
+  if (parts.length > 2) v = parts[0] + "." + parts.slice(1).join("");
+  const [i, f] = v.split(".");
+  if (f != null && f.length > S.from.decimals) v = i + "." + f.slice(0, S.from.decimals);
+  e.target.value = v;
+  try { S.amountIn = v && v !== "." ? ethers.parseUnits(v, S.from.decimals) : 0n; } catch { S.amountIn = 0n; }
+  scheduleQuote();
+});
+function setAmount(wei){
+  S.amountIn = wei;
+  $("amtIn").value = wei > 0n ? ethers.formatUnits(wei, S.from.decimals).replace(/\.0$/, "") : "";
+  scheduleQuote();
+}
+async function setMax(){
+  const b = bal(S.from); if (b == null) return;
+  if (S.from.address === "native") {
+    let reserve = 0n;
+    try { const fd = await read.getFeeData(); reserve = (fd.maxFeePerGas || fd.gasPrice || 0n) * 400000n; } catch {}
+    setAmount(b > reserve ? b - reserve : 0n);
+    if (reserve > 0n) toast(`Left ${fmt(reserve, 18, 2)} PLS for gas.`);
+  } else setAmount(b);
+}
+$("flipBtn").onclick = () => {
+  [S.from, S.to] = [S.to, S.from];
+  const out = S.quote?.out;
+  if (out) setAmount(out); else { S.amountIn = 0n; $("amtIn").value = ""; scheduleQuote(); }
+};
+
+/* ---------- settings ---------- */
+$("settingsBtn").onclick = () => $("settings").classList.toggle("show");
+$("deadlineLbl").textContent = CONFIG.deadlineMinutes;
+$("slipSeg").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  S.slipBps = +b.dataset.bps; $("slipCustom").value = ""; render();
+});
+$("slipCustom").addEventListener("input", e => {
+  const p = parseFloat(e.target.value);
+  if (p > 0 && p <= 49) { S.slipBps = Math.round(p * 100); render(); }
+});
+
+/* ---------- token picker ---------- */
+function openPicker(side){ S.pickSide = side; $("tokSearch").value = ""; renderPicker(); $("pickScrim").classList.add("show"); setTimeout(() => $("tokSearch").focus(), 50); }
+$("fromBtn").onclick = () => openPicker("from");
+$("toBtn").onclick = () => openPicker("to");
+$("tokSearch").addEventListener("input", renderPicker);
+function renderPicker(){
+  const q = $("tokSearch").value.trim().toLowerCase();
+  const other = { from: S.to, to: S.from, lpA: S.lpB, lpB: S.lpA }[S.pickSide];
+  const list = S.tokens.filter(t => !q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.address.toLowerCase() === q);
+  $("tokList").innerHTML = list.map(t => {
+    const b = bal(t);
+    return `<button class="tok-item ${t.address === other.address ? "sel" : ""}" data-addr="${t.address}">
+      ${icon(t, 34)}
+      <span class="grow" style="flex:1;min-width:0"><div class="sym">${esc(t.symbol)}${t.custom ? '<span class="tag">IMPORTED</span>' : ""}</div><div class="nm">${esc(t.name)}</div></span>
+      <span class="val">${b != null ? fmt(b, t.decimals, 4) : ""}</span></button>`;
+  }).join("") || '<div class="empty">No match. Paste a token contract address to import it.</div>';
+  $("importBox").innerHTML = "";
+  if (ethers.isAddress(q) && !findTok(q)) lookupToken(q);
+}
+$("tokList").addEventListener("click", e => {
+  const b = e.target.closest(".tok-item"); if (!b) return;
+  selectToken(findTok(b.dataset.addr));
+});
+function selectToken(t){
+  if (S.pickSide === "lpA" || S.pickSide === "lpB") {
+    const k = S.pickSide, o = k === "lpA" ? "lpB" : "lpA";
+    if (t.address === S[o].address) S[o] = S[k];
+    S[k] = t;
+    $("pickScrim").classList.remove("show");
+    resetLpInputs(); loadPair();
+    return;
+  }
+  if (S.pickSide === "from") { if (t.address === S.to.address) S.to = S.from; S.from = t; }
+  else { if (t.address === S.from.address) S.from = S.to; S.to = t; }
+  $("pickScrim").classList.remove("show");
+  const v = $("amtIn").value;
+  try { S.amountIn = v ? ethers.parseUnits(v, S.from.decimals) : 0n; } catch { S.amountIn = 0n; $("amtIn").value = ""; }
+  scheduleQuote();
+}
+async function lookupToken(addr){
+  $("importBox").innerHTML = '<div class="empty"><span class="spin"></span> Looking up token…</div>';
+  try {
+    const code = await read.getCode(addr);
+    if (code === "0x") throw new Error("not a contract");
+    const c = new ethers.Contract(addr, ERC20_ABI, read);
+    const [symbol, name, decimals] = await Promise.all([c.symbol(), c.name(), c.decimals()]);
+    if ($("tokSearch").value.trim().toLowerCase() !== addr.toLowerCase()) return;
+    const t = { symbol, name, address: ethers.getAddress(addr), decimals: Number(decimals), custom: true };
+    $("importBox").innerHTML = `<div class="warnbox w"><b>Unlisted token.</b> Anyone can create a token with any name, including fake copies of real ones. Only import if you've confirmed this exact address from a source you trust.
+      <div class="row" style="border:0;margin-top:8px">${icon(t, 30)}<div class="grow"><div class="sym">${esc(symbol)}</div><div class="nm addr">${t.address}</div></div>
+      <button class="btn-grad" id="importBtn" style="padding:8px 14px">Import</button></div></div>`;
+    $("importBtn").onclick = () => {
+      S.tokens.push(t);
+      try { localStorage.setItem("halo.custom", JSON.stringify(S.tokens.filter(x => x.custom))); } catch {}
+      if (S.account) balOf(t, S.account).then(b => { S.balances[t.address.toLowerCase()] = b; renderPortfolio(); }).catch(() => {});
+      selectToken(t);
+    };
+  } catch {
+    $("importBox").innerHTML = '<div class="warnbox b">That address isn\'t a readable token on PulseChain.</div>';
+  }
+}
+
+/* ---------- review + execute ---------- */
+function openReview(){
+  const q = S.quote, a = S.from, b = S.to;
+  const minOut = q.wrap ? q.out : q.out * BigInt(10000 - S.slipBps) / 10000n;
+  const high = q.impact != null && q.impact >= CONFIG.blockImpactPct;
+  const warn = q.impact != null && q.impact >= 3;
+  const route = q.wrap ? (a.address === "native" ? "Wrap PLS → WPLS" : "Unwrap WPLS → PLS") : routeLabel(q);
+  const target = q.wrap ? CONFIG.WPLS : q.router.address;
+  $("reviewBody").innerHTML = `
+    <div class="review-big"><div><div class="nm" style="color:var(--muted);font-size:12px">You pay</div><div class="n">${fmt(S.amountIn, a.decimals)}</div></div><div style="display:flex;gap:8px;align-items:center">${icon(a, 32)}<b>${esc(a.symbol)}</b></div></div>
+    <div class="review-big"><div><div class="nm" style="color:var(--muted);font-size:12px">You receive (estimated)</div><div class="n">${fmt(q.out, b.decimals)}</div></div><div style="display:flex;gap:8px;align-items:center">${icon(b, 32)}<b>${esc(b.symbol)}</b></div></div>
+    <div class="kv">
+      ${q.wrap ? "" : `<div><span>Minimum received</span><b>${fmt(minOut, b.decimals)} ${esc(b.symbol)}</b></div>
+      <div><span>Max slippage</span><b>${(S.slipBps / 100).toFixed(2)}%</b></div>
+      <div><span>Price impact</span><b style="color:${high ? "var(--bad)" : warn ? "var(--warn)" : "var(--ok)"}">${q.impact == null ? "—" : q.impact.toFixed(2) + "%"}</b></div>`}
+      <div><span>Route</span><b>${esc(route)}</b></div>
+      <div><span>Contract</span><b><a href="${CONFIG.explorer}/address/${target}" target="_blank" rel="noopener" class="addr">${q.wrap ? "WPLS" : esc(q.router.label)} · ${short(target)}</a></b></div>
+      ${a.address !== "native" && !q.wrap ? `<div><span>Approval</span><b>Exact amount only (if needed)</b></div>` : ""}
+      <div><span>Network</span><b>PulseChain (369)</b></div>
+    </div>
+    ${warn && !high ? `<div class="warnbox w">Price impact is ${q.impact.toFixed(2)}%. Your trade moves the price noticeably; a smaller amount may get a better rate.</div>` : ""}
+    ${high ? `<div class="warnbox b">Price impact is ${q.impact.toFixed(2)}%. You'll receive much less than the market rate.</div><label class="ack"><input type="checkbox" id="ackImpact"> I understand and want to swap anyway</label>` : ""}
+    ${b.custom || a.custom ? `<div class="warnbox w">This trade includes an imported token. Double-check its contract address.</div>` : ""}
+    ${q.unlisted?.length ? `<div class="warnbox w">Best price passes through <b>${q.unlisted.map(x => esc(symOf(x))).join(", ")}</b>, a smaller coin found by live pool search. You never hold it; it's swapped straight through. The trade is test-run first, and if that coin has transfer fees or blocks sales, a safer route is used instead or nothing is sent.</div>` : ""}
+  `;
+  const btn = $("confirmBtn");
+  btn.disabled = high; btn.textContent = "Confirm in wallet";
+  if (high) $("ackImpact").onchange = e => btn.disabled = !e.target.checked;
+  $("reviewScrim").classList.add("show");
+}
+$("confirmBtn").onclick = execute;
+
+async function execute(){
+  const btn = $("confirmBtn");
+  let q = S.quote; const a = S.from, b = S.to, amt = S.amountIn;
+  S.busy = true; btn.disabled = true;
+  try {
+    await checkChain();
+    if (!S.chainOk) { await switchChain(); if (!S.chainOk) throw new Error("Please switch your wallet to PulseChain."); }
+    const net = await S.walletProvider.getNetwork();
+    if (net.chainId !== BigInt(CONFIG.chainId)) throw new Error("Wallet is not on PulseChain.");
+    const signer = await S.walletProvider.getSigner();
+    const me = await signer.getAddress();
+    const label = `${fmt(amt, a.decimals)} ${a.symbol} → ${b.symbol}`;
+    let tx;
+
+    // re-run the full route search right before sending, so the freshest best route is used
+    if (!q.wrap) {
+      btn.innerHTML = '<span class="spin"></span> Re-checking best route…';
+      const fresh = await getQuote(a, b, amt);
+      if (!fresh) throw new Error("No route available right now. Try again.");
+      const floor = q.out * BigInt(10000 - S.slipBps) / 10000n;
+      if (fresh.out < floor) { S.quote = fresh; render(); throw new Error("Price moved more than your slippage setting. Review the new quote."); }
+      q = fresh; S.quote = fresh;
+    }
+
+    if (q.wrap) {
+      const w = new ethers.Contract(CONFIG.WPLS, WPLS_ABI, signer);
+      btn.innerHTML = '<span class="spin"></span> Confirm in wallet…';
+      tx = a.address === "native" ? await w.deposit({ value: amt }) : await w.withdraw(amt);
+    } else {
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + CONFIG.deadlineMinutes * 60);
+      const floor = q.out * BigInt(10000 - S.slipBps) / 10000n;       // never accept less than the quoted minimum
+      const cands = [q, ...(q.alts || [])].filter(c => c.out >= floor);
+      let chosen = null, lastErr = null;
+      for (const c of cands) {
+        const minOut = floor;
+        const fn = a.address === "native" ? "swapExactETHForTokensSupportingFeeOnTransferTokens"
+          : b.address === "native" ? "swapExactTokensForETHSupportingFeeOnTransferTokens"
+          : "swapExactTokensForTokensSupportingFeeOnTransferTokens";
+        const args = a.address === "native" ? [minOut, c.path, me, deadline] : [amt, minOut, c.path, me, deadline];
+        const opts = a.address === "native" ? { value: amt } : {};
+        if (a.address !== "native") {
+          const erc = new ethers.Contract(a.address, ERC20_ABI, signer);
+          const allowance = await erc.allowance(me, c.router.address);
+          if (allowance < amt) {
+            btn.innerHTML = `<span class="spin"></span> Approve ${esc(a.symbol)} in wallet…`;
+            const ap = await erc.approve(c.router.address, amt);          // exact amount, never unlimited
+            track(ap.hash, `Approve ${fmt(amt, a.decimals)} ${a.symbol}`);
+            btn.innerHTML = '<span class="spin"></span> Waiting for approval…';
+            const r = await ap.wait();
+            settle(ap.hash, r?.status === 1);
+            if (r?.status !== 1) throw new Error("Approval failed.");
+          }
+        }
+        // dry run from the user's address: catches taxed / blocked coins before anything is signed
+        btn.innerHTML = '<span class="spin"></span> Test-running route…';
+        try {
+          await new ethers.Contract(c.router.address, ROUTER_ABI, read)[fn].staticCall(...args, { ...opts, from: me });
+          chosen = { c, fn, args, opts }; break;
+        } catch (e) { lastErr = e; }
+      }
+      if (!chosen) throw new Error("Every good route failed its test run (a coin on the path may have transfer fees or block sales). Nothing was sent.");
+      if (chosen.c !== q) { S.quote = chosen.c; toast(`Best route failed its test run. Using ${routeLabel(chosen.c)} instead.`); }
+      btn.innerHTML = '<span class="spin"></span> Confirm swap in wallet…';
+      const router = new ethers.Contract(chosen.c.router.address, ROUTER_ABI, signer);
+      tx = await router[chosen.fn](...chosen.args, chosen.opts);
+    }
+    $("reviewScrim").classList.remove("show");
+    track(tx.hash, label);
+    toast("Transaction sent.", "", `${CONFIG.explorer}/tx/${tx.hash}`);
+    setAmount(0n);
+    const r = await tx.wait();
+    settle(tx.hash, r?.status === 1);
+    toast(r?.status === 1 ? `Swapped ${label}` : "Transaction failed.", r?.status === 1 ? "ok" : "err", `${CONFIG.explorer}/tx/${tx.hash}`);
+    refreshBalances();
+  } catch (e) {
+    toast(errMsg(e), "err");
+  } finally {
+    S.busy = false; btn.disabled = false; btn.textContent = "Confirm in wallet"; render();
+  }
+}
+function track(hash, label){ S.history.unshift({ hash, label, status: "pending" }); renderActivity(); }
+function settle(hash, ok){ const h = S.history.find(x => x.hash === hash); if (h) h.status = ok ? "ok" : "fail"; renderActivity(); }
+
+/* ---------- pools ---------- */
+const FACTORY_ABI = ["function getPair(address,address) view returns (address)"];
+const PAIR_ABI = [
+  "function token0() view returns (address)", "function token1() view returns (address)",
+  "function factory() view returns (address)",
+  "function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)",
+  "function totalSupply() view returns (uint256)", "function balanceOf(address) view returns (uint256)",
+];
+const LP_ROUTER_ABI = [
+  "function addLiquidity(address tokenA, address tokenB, uint256 amountADesired, uint256 amountBDesired, uint256 amountAMin, uint256 amountBMin, address to, uint256 deadline) returns (uint256, uint256, uint256)",
+  "function addLiquidityETH(address token, uint256 amountTokenDesired, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline) payable returns (uint256, uint256, uint256)",
+  "function removeLiquidity(address tokenA, address tokenB, uint256 liquidity, uint256 amountAMin, uint256 amountBMin, address to, uint256 deadline) returns (uint256, uint256)",
+  "function removeLiquidityETHSupportingFeeOnTransferTokens(address token, uint256 liquidity, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline) returns (uint256)",
+];
+const pairIface = new ethers.Interface(PAIR_ABI), factoryIface = new ethers.Interface(FACTORY_ABI), ercIface = new ethers.Interface(ERC20_ABI);
+const TOKMETA = {};
+Object.assign(S, { tab: "swap", lpMode: "list", positions: null, posLoading: false, posSeq: 0,
+  lpA: S.tokens[0], lpB: S.tokens[2], lpVer: 0, lpPair: null, lpSeq: 0, lpAmtA: 0n, lpAmtB: 0n, lpLast: "a", lpBal: {}, rm: null });
+
+// generic batched read: [{ target, iface, fn, args }] -> decoded results (null on failure)
+async function multi(calls){
+  const out = new Array(calls.length).fill(null);
+  const CHUNK = 100, mc = new ethers.Contract(CONFIG.multicall, MC_ABI, read);
+  const starts = []; for (let i = 0; i < calls.length; i += CHUNK) starts.push(i);
+  await Promise.all(starts.map(async start => {
+    const slice = calls.slice(start, start + CHUNK);
+    try {
+      const res = await mc.aggregate3.staticCall(slice.map(c => ({ target: c.target, allowFailure: true, callData: c.iface.encodeFunctionData(c.fn, c.args || []) })));
+      res.forEach((r, i) => { if (r.success && r.returnData !== "0x") { try { out[start + i] = slice[i].iface.decodeFunctionResult(slice[i].fn, r.returnData); } catch {} } });
+    } catch {
+      await Promise.all(slice.map(async (c, i) => {
+        try { const d = await read.call({ to: c.target, data: c.iface.encodeFunctionData(c.fn, c.args || []) }); out[start + i] = c.iface.decodeFunctionResult(c.fn, d); } catch {}
+      }));
+    }
+  }));
+  return out;
+}
+function tokenFor(addr){
+  if (eq(addr, CONFIG.WPLS)) return findTok(CONFIG.WPLS);
+  return findTok(addr) || TOKMETA[addr.toLowerCase()] || { symbol: META[addr.toLowerCase()] || short(addr), name: "", address: ethers.getAddress(addr), decimals: 18 };
+}
+async function loadMeta(addrs){
+  if (!addrs.length) return;
+  const r = await multi(addrs.flatMap(a => [{ target: a, iface: ercIface, fn: "symbol" }, { target: a, iface: ercIface, fn: "decimals" }]));
+  addrs.forEach((a, i) => { TOKMETA[a.toLowerCase()] = { symbol: r[i * 2]?.[0] || short(a), name: "", address: ethers.getAddress(a), decimals: r[i * 2 + 1] ? Number(r[i * 2 + 1][0]) : 18 }; });
+}
+function lpImports(){ try { return JSON.parse(localStorage.getItem("halo.pools") || "[]"); } catch { return []; } }
+function addImport(pair){ try { const l = lpImports(); if (!l.some(x => eq(x, pair))) { l.push(pair); localStorage.setItem("halo.pools", JSON.stringify(l)); } } catch {} }
+
+async function walletReady(){
+  if (!S.account) throw new Error("Connect your wallet first.");
+  await checkChain();
+  if (!S.chainOk) { await switchChain(); if (!S.chainOk) throw new Error("Please switch your wallet to PulseChain."); }
+  const net = await S.walletProvider.getNetwork();
+  if (net.chainId !== BigInt(CONFIG.chainId)) throw new Error("Wallet is not on PulseChain.");
+  const signer = await S.walletProvider.getSigner();
+  return { signer, me: await signer.getAddress() };
+}
+async function ensureAllowance(token, symbol, decimals, spender, amt, signer, me, btn){
+  const erc = new ethers.Contract(token, ERC20_ABI, signer);
+  if ((await erc.allowance(me, spender)) >= amt) return;
+  btn.innerHTML = `<span class="spin"></span> Approve ${esc(symbol)} in wallet…`;
+  const ap = await erc.approve(spender, amt);                 // exact amount, never unlimited
+  track(ap.hash, `Approve ${fmt(amt, decimals)} ${symbol}`);
+  btn.innerHTML = '<span class="spin"></span> Waiting for approval…';
+  const r = await ap.wait(); settle(ap.hash, r?.status === 1);
+  if (r?.status !== 1) throw new Error("Approval failed.");
+}
+const deadlineTs = () => BigInt(Math.floor(Date.now() / 1000) + CONFIG.deadlineMinutes * 60);
+
+/* positions */
+async function fetchJson(url, opts = {}, ms = 7000){
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try { const r = await fetch(url, { ...opts, signal: ctl.signal }); return await r.json(); } finally { clearTimeout(t); }
+}
+async function explorerTokens(me){
+  const out = new Set();
+  const base = CONFIG.explorerApi.replace(/\/api\/v2\/?$/, "");
+  await Promise.all([
+    // v2 API, following every page
+    (async () => {
+      let params = null;
+      for (let page = 0; page < 25; page++) {
+        const qs = new URLSearchParams({ type: "ERC-20", ...(params || {}) });
+        const j = await fetchJson(`${CONFIG.explorerApi}/addresses/${me}/tokens?${qs}`);
+        (j.items || []).forEach(it => { const a = it.token?.address || it.token?.address_hash; if (a) out.add(a.toLowerCase()); });
+        if (!j.next_page_params) break;
+        params = j.next_page_params;
+      }
+    })().catch(() => {}),
+    // classic API: returns the whole token list in one response
+    fetchJson(`${base}/api?module=account&action=tokenlist&address=${me}`)
+      .then(j => (Array.isArray(j.result) ? j.result : []).forEach(t => { if (t.contractAddress) out.add(t.contractAddress.toLowerCase()); }))
+      .catch(() => {}),
+  ]);
+  return [...out];
+}
+async function subgraphPositions(me){
+  const out = new Set(), u = me.toLowerCase();
+  const queries = [
+    `{ liquidityPositions(first: 1000, where: { user: "${u}", liquidityTokenBalance_gt: 0 }) { pair { id } } }`,
+    `{ user(id: "${u}") { liquidityPositions(first: 1000, where: { liquidityTokenBalance_gt: 0 }) { pair { id } } } }`,
+  ];
+  await Promise.all(CONFIG.discovery.subgraphs.flatMap(url => queries.map(query =>
+    fetchJson(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query }) }, 6000)
+      .then(j => (j.data?.liquidityPositions || j.data?.user?.liquidityPositions || []).forEach(p => p.pair?.id && out.add(p.pair.id.toLowerCase())))
+      .catch(() => {}))));
+  return [...out];
+}
+async function listedPairs(){
+  const listed = [...new Set(S.tokens.map(t => pathAddr(t).toLowerCase()))];
+  const gp = [];
+  for (const r of CONFIG.routers) for (let i = 0; i < listed.length; i++) for (let j = i + 1; j < listed.length; j++)
+    gp.push({ target: r.factory, iface: factoryIface, fn: "getPair", args: [listed[i], listed[j]] });
+  return (await multi(gp)).filter(res => res && res[0] !== ethers.ZeroAddress).map(res => res[0].toLowerCase());
+}
+function updatePoolsTab(){
+  const n = S.positions?.length;
+  document.querySelector('#tabs [data-tab="pools"]').textContent = n ? `Pools (${n})` : "Pools";
+}
+async function loadPositions(){
+  if (!S.account) { S.positions = []; renderPools(); updatePoolsTab(); renderPortfolio(); return; }
+  const me = S.account, seq = ++S.posSeq;
+  S.posLoading = true; renderPools();
+  const cand = new Set();
+  // Three independent sources run in parallel; any one of them finding a pool is enough.
+  await Promise.all([
+    explorerTokens(me).then(l => l.forEach(a => cand.add(a))),        // everything the wallet holds (all pages)
+    subgraphPositions(me).then(l => l.forEach(a => cand.add(a))),     // PulseX's own record of the wallet's pools
+    listedPairs().then(l => l.forEach(a => cand.add(a))),             // every pool between listed tokens
+  ]);
+  lpImports().forEach(a => cand.add(a.toLowerCase()));               // pools this browser has looked up before
+
+  const pairs = [...cand];
+  const bals = await multi(pairs.map(p => ({ target: p, iface: pairIface, fn: "balanceOf", args: [me] })));
+  const held = pairs.map((p, i) => ({ p, lp: bals[i]?.[0] })).filter(x => x.lp > 0n);
+  const F = ["token0", "token1", "factory", "getReserves", "totalSupply"];
+  const info = await multi(held.flatMap(h => F.map(fn => ({ target: h.p, iface: pairIface, fn }))));
+  const pos = [], unknown = new Set();
+  held.forEach((h, i) => {
+    const [t0, t1, fac, res, ts] = F.map((_, k) => info[i * F.length + k]);
+    if (!t0 || !t1 || !fac || !res || !ts || ts[0] === 0n) return;
+    const router = CONFIG.routers.find(r => eq(r.factory, fac[0]));
+    if (!router) return;                                   // not a PulseX pool
+    pos.push({ pair: ethers.getAddress(h.p), router, a0: t0[0], a1: t1[0], r0: res[0], r1: res[1], ts: ts[0], lp: h.lp });
+    [t0[0], t1[0]].forEach(a => { if (!findTok(a) && !TOKMETA[a.toLowerCase()]) unknown.add(a); });
+  });
+  await loadMeta([...unknown]);
+  if (seq !== S.posSeq || me !== S.account) return;
+  S.positions = pos; S.posLoading = false; renderPools(); updatePoolsTab(); renderPortfolio();
+}
+
+function renderPools(){
+  const add = S.lpMode === "add";
+  $("poolHome").style.display = add ? "none" : "block";
+  $("addPanel").style.display = add ? "block" : "none";
+  if (add) { renderAdd(); return; }
+  const el = $("poolList");
+  if (!S.account) { el.innerHTML = '<div class="empty" style="padding:24px 10px;text-align:center">Connect a wallet to see and manage your liquidity positions.</div>'; return; }
+  if (!S.positions) { el.innerHTML = '<div class="empty" style="padding:24px 10px;text-align:center"><span class="spin"></span> Finding your positions…</div>'; return; }
+  if (!S.positions.length) { el.innerHTML = `<div class="empty" style="padding:24px 10px;text-align:center">${S.posLoading ? '<span class="spin"></span> Finding your positions…' : "No liquidity positions found."}</div>`; return; }
+  el.innerHTML = S.positions.map((p, i) => {
+    const t0 = tokenFor(p.a0), t1 = tokenFor(p.a1);
+    const share = Number(p.lp * 1000000n / p.ts) / 10000;
+    return `<div class="pos">
+      <div class="pos-hd"><span class="pair-ico">${icon(t0, 26)}${icon(t1, 26)}</span><b>${esc(t0.symbol)} / ${esc(t1.symbol)}</b><span class="pill">${esc(p.router.label.replace("PulseX ", ""))}</span></div>
+      <div class="pos-grid">
+        <span>Pooled ${esc(t0.symbol)}</span><b>${fmt(p.lp * p.r0 / p.ts, t0.decimals)}</b>
+        <span>Pooled ${esc(t1.symbol)}</span><b>${fmt(p.lp * p.r1 / p.ts, t1.decimals)}</b>
+        <span>Your pool share</span><b>${share < 0.01 ? "<0.01" : share.toFixed(2)}%</b>
+        <span>Pool tokens</span><b>${fmt(p.lp, 18)}</b>
+      </div>
+      <div class="pos-actions"><button class="btn-ghost" data-add="${i}">Add</button><button class="btn-ghost" data-rm="${i}">Remove</button></div>
+    </div>`;
+  }).join("") + (S.posLoading ? '<div class="empty" style="text-align:center"><span class="spin"></span> Refreshing…</div>' : "");
+}
+$("poolList").addEventListener("click", e => {
+  const a = e.target.closest("[data-add]"), r = e.target.closest("[data-rm]");
+  if (a) {
+    const p = S.positions[+a.dataset.add];
+    const pick = x => eq(x, CONFIG.WPLS) ? S.tokens[0] : tokenFor(x);   // offer native PLS for WPLS pools
+    S.lpA = pick(p.a0); S.lpB = pick(p.a1); S.lpVer = CONFIG.routers.indexOf(p.router);
+    S.lpMode = "add"; resetLpInputs(); renderPools(); loadPair();
+  }
+  if (r) openRemove(+r.dataset.rm);
+});
+$("newPosBtn").onclick = () => { S.lpMode = "add"; resetLpInputs(); renderPools(); loadPair(); };
+$("addBack").onclick = () => { S.lpMode = "list"; renderPools(); };
+$("verSeg").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; S.lpVer = +b.dataset.v; resetLpInputs(); loadPair(); });
+$("lpABtn").onclick = () => openPicker("lpA");
+$("lpBBtn").onclick = () => openPicker("lpB");
+
+/* add liquidity */
+function resetLpInputs(){ S.lpAmtA = S.lpAmtB = 0n; $("lpAmtA").value = ""; $("lpAmtB").value = ""; }
+function cleanNum(el, dec){
+  let v = el.value.replace(/,/g, ".").replace(/[^0-9.]/g, "");
+  const parts = v.split("."); if (parts.length > 2) v = parts[0] + "." + parts.slice(1).join("");
+  const [i, f] = v.split("."); if (f != null && f.length > dec) v = i + "." + f.slice(0, dec);
+  el.value = v;
+  try { return v && v !== "." ? ethers.parseUnits(v, dec) : 0n; } catch { return 0n; }
+}
+const showNum = (v, dec) => v > 0n ? ethers.formatUnits(v, dec).replace(/(\.\d{0,8})\d*$/, "$1").replace(/\.0*$/, "").replace(/(\.\d*?)0+$/, "$1") : "";
+async function loadPair(){
+  const A = pathAddr(S.lpA), B = pathAddr(S.lpB), r = CONFIG.routers[S.lpVer], seq = ++S.lpSeq;
+  S.lpPair = null; renderAdd();
+  if (eq(A, B)) return;
+  try {
+    const pair = await new ethers.Contract(r.factory, FACTORY_ABI, read).getPair(A, B);
+    let info = { exists: false, address: null };
+    if (pair !== ethers.ZeroAddress) {
+      const [t0, res, ts] = await multi(["token0", "getReserves", "totalSupply"].map(fn => ({ target: pair, iface: pairIface, fn })));
+      const aIs0 = eq(t0[0], A);
+      info = { address: pair, rA: aIs0 ? res[0] : res[1], rB: aIs0 ? res[1] : res[0], ts: ts[0] };
+      info.exists = info.ts > 0n && info.rA > 0n && info.rB > 0n;
+      if (S.account) {
+        const [b] = await multi([{ target: pair, iface: pairIface, fn: "balanceOf", args: [S.account] }]);
+        if (b?.[0] > 0n) addImport(pair);
+      }
+    }
+    const bals = S.account ? await Promise.all([balOf(S.lpA, S.account), balOf(S.lpB, S.account)]).catch(() => [null, null]) : [null, null];
+    if (seq !== S.lpSeq) return;
+    S.lpBal = { a: bals[0], b: bals[1] };
+    S.lpPair = info; recalcLp();
+  } catch { if (seq === S.lpSeq) { S.lpPair = { error: true }; renderAdd(); } }
+}
+$("lpAmtA").addEventListener("input", e => { S.lpAmtA = cleanNum(e.target, S.lpA.decimals); S.lpLast = "a"; recalcLp(); });
+$("lpAmtB").addEventListener("input", e => { S.lpAmtB = cleanNum(e.target, S.lpB.decimals); S.lpLast = "b"; recalcLp(); });
+function recalcLp(){
+  const p = S.lpPair;
+  if (p?.exists) {
+    if (S.lpLast === "a") { S.lpAmtB = S.lpAmtA * p.rB / p.rA; $("lpAmtB").value = showNum(S.lpAmtB, S.lpB.decimals); }
+    else { S.lpAmtA = S.lpAmtB * p.rA / p.rB; $("lpAmtA").value = showNum(S.lpAmtA, S.lpA.decimals); }
+  }
+  renderAdd();
+}
+function renderAdd(){
+  const A = S.lpA, B = S.lpB, p = S.lpPair;
+  $("lpABtn").innerHTML = tokBtnHTML(A); $("lpBBtn").innerHTML = tokBtnHTML(B);
+  document.querySelectorAll("#verSeg button").forEach(b => b.classList.toggle("on", +b.dataset.v === S.lpVer));
+  $("lpBalA").textContent = S.lpBal.a != null ? `Balance: ${fmt(S.lpBal.a, A.decimals, 4)}` : "";
+  $("lpBalB").textContent = S.lpBal.b != null ? `Balance: ${fmt(S.lpBal.b, B.decimals, 4)}` : "";
+  const same = eq(pathAddr(A), pathAddr(B));
+  let info = "";
+  if (same) info = "";
+  else if (!p) info = '<div class="empty"><span class="spin"></span> Checking pool…</div>';
+  else if (p.error) info = '<div class="warnbox b">Couldn\'t read this pool. Try again in a moment.</div>';
+  else if (!p.exists) {
+    const px = S.lpAmtA > 0n && S.lpAmtB > 0n ? Number(ethers.formatUnits(S.lpAmtB, B.decimals)) / Number(ethers.formatUnits(S.lpAmtA, A.decimals)) : null;
+    info = `<div class="warnbox w"><b>No ${esc(CONFIG.routers[S.lpVer].label)} pool for this pair yet.</b> You'll create it, and the amounts you enter set its starting price. If that price is off from the market, arbitrage bots will take the difference right away.${px != null ? `<br>Starting price: 1 ${esc(A.symbol)} = ${px.toPrecision(6)} ${esc(B.symbol)}` : ""}</div>`;
+  } else {
+    const rate = Number(ethers.formatUnits(p.rB, B.decimals)) / Number(ethers.formatUnits(p.rA, A.decimals));
+    let share = null;
+    if (S.lpAmtA > 0n && S.lpAmtB > 0n) {
+      const mA = S.lpAmtA * p.ts / p.rA, mB = S.lpAmtB * p.ts / p.rB, m = mA < mB ? mA : mB;
+      share = Number(m * 1000000n / (p.ts + m)) / 10000;
+    }
+    info = `<div class="details show">
+      <div><span>Pool price</span><b>1 ${esc(A.symbol)} = ${rate >= 1 ? rate.toLocaleString("en-US", { maximumFractionDigits: 4 }) : rate.toPrecision(4)} ${esc(B.symbol)}</b></div>
+      <div><span>Pool size</span><b>${fmt(p.rA, A.decimals)} ${esc(A.symbol)} + ${fmt(p.rB, B.decimals)} ${esc(B.symbol)}</b></div>
+      ${share != null ? `<div><span>Your share after adding</span><b>${share < 0.01 ? "<0.01" : share.toFixed(2)}%</b></div>` : ""}
+      <div><span>Max slippage</span><b>${(S.slipBps / 100).toFixed(2)}%</b></div>
+      <div><span>Pool contract</span><b><a class="addr" href="${CONFIG.explorer}/address/${p.address}" target="_blank" rel="noopener">${short(p.address)} ↗</a></b></div>
+    </div>`;
+  }
+  $("lpInfo").innerHTML = info;
+
+  const btn = $("lpAddBtn"); if (S.busy) return;
+  btn.disabled = false; btn.onclick = null;
+  if (!S.account) { btn.textContent = "Connect wallet"; btn.onclick = connect; }
+  else if (!S.chainOk) { btn.textContent = "Switch to PulseChain"; btn.onclick = switchChain; }
+  else if (same) { btn.textContent = "Select two different tokens"; btn.disabled = true; }
+  else if (!p || p.error) { btn.textContent = "Add liquidity"; btn.disabled = true; }
+  else if (S.lpAmtA === 0n || S.lpAmtB === 0n) { btn.textContent = "Enter amounts"; btn.disabled = true; }
+  else if (S.lpBal.a != null && S.lpBal.a < S.lpAmtA) { btn.textContent = `Insufficient ${A.symbol}`; btn.disabled = true; }
+  else if (S.lpBal.b != null && S.lpBal.b < S.lpAmtB) { btn.textContent = `Insufficient ${B.symbol}`; btn.disabled = true; }
+  else { btn.textContent = p.exists ? "Add liquidity" : "Create pool & add liquidity"; btn.onclick = executeAdd; }
+}
+async function executeAdd(){
+  const btn = $("lpAddBtn"); S.busy = true; btn.disabled = true;
+  try {
+    const { signer, me } = await walletReady();
+    const r = CONFIG.routers[S.lpVer], p = S.lpPair, A = S.lpA, B = S.lpB, amtA = S.lpAmtA, amtB = S.lpAmtB;
+    const keep = BigInt(10000 - S.slipBps);
+    const minA = p.exists ? amtA * keep / 10000n : amtA, minB = p.exists ? amtB * keep / 10000n : amtB;
+    for (const [t, amt] of [[A, amtA], [B, amtB]]) if (t.address !== "native") await ensureAllowance(t.address, t.symbol, t.decimals, r.address, amt, signer, me, btn);
+    let fn, args, opts = {};
+    if (A.address === "native" || B.address === "native") {
+      const [tok, aT, mT, aE, mE] = A.address === "native" ? [B, amtB, minB, amtA, minA] : [A, amtA, minA, amtB, minB];
+      fn = "addLiquidityETH"; args = [tok.address, aT, mT, mE, me, deadlineTs()]; opts = { value: aE };
+    } else { fn = "addLiquidity"; args = [A.address, B.address, amtA, amtB, minA, minB, me, deadlineTs()]; }
+    btn.innerHTML = '<span class="spin"></span> Test-running…';
+    try { await new ethers.Contract(r.address, LP_ROUTER_ABI, read)[fn].staticCall(...args, { ...opts, from: me }); }
+    catch (e) { throw new Error("Test run failed, so nothing was sent. " + (e.shortMessage || e.reason || "")); }
+    btn.innerHTML = '<span class="spin"></span> Confirm in wallet…';
+    const tx = await new ethers.Contract(r.address, LP_ROUTER_ABI, signer)[fn](...args, opts);
+    const label = `Add ${A.symbol}/${B.symbol} liquidity`;
+    track(tx.hash, label); toast("Transaction sent.", "", `${CONFIG.explorer}/tx/${tx.hash}`);
+    const rc = await tx.wait(); settle(tx.hash, rc?.status === 1);
+    toast(rc?.status === 1 ? `Added ${A.symbol}/${B.symbol} liquidity` : "Transaction failed.", rc?.status === 1 ? "ok" : "err", `${CONFIG.explorer}/tx/${tx.hash}`);
+    if (rc?.status === 1) {
+      const pair = await new ethers.Contract(r.factory, FACTORY_ABI, read).getPair(pathAddr(A), pathAddr(B)).catch(() => null);
+      if (pair && pair !== ethers.ZeroAddress) addImport(pair);
+      resetLpInputs(); S.lpMode = "list";
+    }
+    refreshBalances(); loadPositions();
+  } catch (e) { toast(errMsg(e), "err"); }
+  finally { S.busy = false; btn.innerHTML = ""; renderPools(); }
+}
+
+/* remove liquidity */
+function openRemove(i){
+  const p = S.positions[i], t0 = tokenFor(p.a0), t1 = tokenFor(p.a1);
+  const hasW = eq(p.a0, CONFIG.WPLS) || eq(p.a1, CONFIG.WPLS);
+  S.rm = { p, t0, t1, pct: 50, hasW };
+  $("rmTitle").textContent = `Remove ${t0.symbol} / ${t1.symbol}`;
+  $("rmRange").value = 50; $("rmAsPls").checked = true;
+  $("rmPlsRow").style.display = hasW ? "flex" : "none";
+  $("rmKv").innerHTML = `
+    <div><span>Pool</span><b>${esc(p.router.label)}</b></div>
+    <div><span>Max slippage</span><b>${(S.slipBps / 100).toFixed(2)}%</b></div>
+    <div><span>Approval</span><b>Exact pool-token amount only</b></div>
+    <div><span>Pool contract</span><b><a class="addr" href="${CONFIG.explorer}/address/${p.pair}" target="_blank" rel="noopener">${short(p.pair)} ↗</a></b></div>`;
+  updateRemove();
+  $("removeScrim").classList.add("show");
+}
+function updateRemove(){
+  const { p, t0, t1, pct, hasW } = S.rm;
+  const liq = p.lp * BigInt(pct) / 100n;
+  const plsLbl = t => hasW && $("rmAsPls").checked && eq(t.address, CONFIG.WPLS) ? "PLS" : t.symbol;
+  $("rmPct").textContent = pct + "%";
+  document.querySelectorAll("#rmSeg button").forEach(b => b.classList.toggle("on", +b.dataset.p === pct));
+  const row = (t, amt) => `<div><div class="nm" style="color:var(--muted);font-size:12px">You receive</div><div class="n">${fmt(amt, t.decimals)}</div></div><div style="display:flex;gap:8px;align-items:center">${icon(t, 30)}<b>${esc(plsLbl(t))}</b></div>`;
+  $("rmOut0").innerHTML = row(t0, liq * p.r0 / p.ts);
+  $("rmOut1").innerHTML = row(t1, liq * p.r1 / p.ts);
+  const btn = $("rmBtn"); if (!S.busy) { btn.disabled = liq === 0n; btn.textContent = "Remove liquidity"; }
+}
+$("rmRange").addEventListener("input", e => { S.rm.pct = +e.target.value; updateRemove(); });
+$("rmSeg").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; S.rm.pct = +b.dataset.p; $("rmRange").value = S.rm.pct; updateRemove(); });
+$("rmAsPls").addEventListener("change", updateRemove);
+$("rmBtn").onclick = async () => {
+  const btn = $("rmBtn"); S.busy = true; btn.disabled = true;
+  try {
+    const { signer, me } = await walletReady();
+    const { p, t0, t1, pct, hasW } = S.rm;
+    // re-read the pool so minimums use current reserves
+    const [res, ts] = await multi(["getReserves", "totalSupply"].map(fn => ({ target: p.pair, iface: pairIface, fn })));
+    const r0 = res ? res[0] : p.r0, r1 = res ? res[1] : p.r1, supply = ts ? ts[0] : p.ts;
+    const liq = p.lp * BigInt(pct) / 100n, keep = BigInt(10000 - S.slipBps);
+    const min0 = liq * r0 / supply * keep / 10000n, min1 = liq * r1 / supply * keep / 10000n;
+    await ensureAllowance(p.pair, "pool tokens", 18, p.router.address, liq, signer, me, btn);
+    let fn, args;
+    if (hasW && $("rmAsPls").checked) {
+      const tokIs0 = !eq(p.a0, CONFIG.WPLS);
+      fn = "removeLiquidityETHSupportingFeeOnTransferTokens";
+      args = [tokIs0 ? p.a0 : p.a1, liq, tokIs0 ? min0 : min1, tokIs0 ? min1 : min0, me, deadlineTs()];
+    } else { fn = "removeLiquidity"; args = [p.a0, p.a1, liq, min0, min1, me, deadlineTs()]; }
+    btn.innerHTML = '<span class="spin"></span> Test-running…';
+    try { await new ethers.Contract(p.router.address, LP_ROUTER_ABI, read)[fn].staticCall(...args, { from: me }); }
+    catch (e) { throw new Error("Test run failed, so nothing was sent. " + (e.shortMessage || e.reason || "")); }
+    btn.innerHTML = '<span class="spin"></span> Confirm in wallet…';
+    const tx = await new ethers.Contract(p.router.address, LP_ROUTER_ABI, signer)[fn](...args);
+    $("removeScrim").classList.remove("show");
+    track(tx.hash, `Remove ${pct}% ${t0.symbol}/${t1.symbol}`); toast("Transaction sent.", "", `${CONFIG.explorer}/tx/${tx.hash}`);
+    const rc = await tx.wait(); settle(tx.hash, rc?.status === 1);
+    toast(rc?.status === 1 ? `Removed ${pct}% of ${t0.symbol}/${t1.symbol}` : "Transaction failed.", rc?.status === 1 ? "ok" : "err", `${CONFIG.explorer}/tx/${tx.hash}`);
+    refreshBalances(); loadPositions();
+  } catch (e) { toast(errMsg(e), "err"); }
+  finally { S.busy = false; btn.disabled = false; btn.textContent = "Remove liquidity"; }
+};
+
+/* tabs */
+$("tabs").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  S.tab = b.dataset.tab;
+  document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b));
+  $("swapView").style.display = S.tab === "swap" ? "block" : "none";
+  $("poolsView").style.display = S.tab === "pools" ? "block" : "none";
+  if (S.tab === "pools") { S.lpMode = "list"; renderPools(); loadPositions(); }
+});
+
+/* ---------- render ---------- */
+function tokBtnHTML(t){ return `${icon(t)}<span>${esc(t.symbol)}</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6"/></svg>`; }
+function render(){
+  $("appName").textContent = CONFIG.appName; document.title = CONFIG.appName;
+  $("fromBtn").innerHTML = tokBtnHTML(S.from);
+  $("toBtn").innerHTML = tokBtnHTML(S.to);
+
+  const cb = $("connectBtn");
+  if (S.account) { cb.textContent = short(S.account); cb.onclick = () => window.open(`${CONFIG.explorer}/address/${S.account}`, "_blank", "noopener"); }
+  else { cb.textContent = "Connect wallet"; cb.onclick = connect; }
+  $("netDot").className = "dot " + (S.account ? (S.chainOk ? "on" : "bad") : "");
+  $("netLabel").textContent = S.account && !S.chainOk ? "Wrong network" : "PulseChain";
+
+  const fb = bal(S.from), tb = bal(S.to);
+  $("fromBal").innerHTML = fb != null ? `Balance: ${fmt(fb, S.from.decimals, 4)}<button class="max" id="maxBtn">MAX</button>` : "";
+  if ($("maxBtn")) $("maxBtn").onclick = setMax;
+  $("toBal").textContent = tb != null ? `Balance: ${fmt(tb, S.to.decimals, 4)}` : "";
+
+  const q = S.quote;
+  $("amtOut").value = S.quoting ? "…" : q ? ethers.formatUnits(q.out, S.to.decimals).replace(/(\.\d{0,6})\d*$/, "$1").replace(/\.$/, "") : "";
+  if (q && S.amountIn > 0n) {
+    const rate = Number(ethers.formatUnits(q.out, S.to.decimals)) / Number(ethers.formatUnits(S.amountIn, S.from.decimals));
+    const rateStr = rate >= 1 ? rate.toLocaleString("en-US", { maximumFractionDigits: 4 }) : rate.toPrecision(4);
+    $("rateLine").textContent = `1 ${S.from.symbol} ≈ ${rateStr} ${S.to.symbol}`;
+    $("details").classList.add("show");
+    $("dRate").textContent = `1 ${S.from.symbol} ≈ ${rateStr} ${S.to.symbol}`;
+    const imp = q.impact;
+    $("dImpact").textContent = q.wrap ? "0%" : imp == null ? "—" : (imp < 0.01 ? "<0.01" : imp.toFixed(2)) + "%";
+    $("dImpact").style.color = imp >= CONFIG.blockImpactPct ? "var(--bad)" : imp >= 3 ? "var(--warn)" : "var(--ok)";
+    const minOut = q.wrap ? q.out : q.out * BigInt(10000 - S.slipBps) / 10000n;
+    $("dMin").textContent = `${fmt(minOut, S.to.decimals)} ${S.to.symbol}`;
+    $("dRoute").textContent = q.wrap ? "WPLS contract" : q.router.label + " · " + routeLabel(q);
+    $("dChecked").textContent = q.wrap ? "—" : `${q.found} live of ${q.checked} checked`;
+    const g = q.gainVsDirect;
+    $("dGainRow").style.display = g != null && g > 0.005 ? "flex" : "none";
+    if (g != null) $("dGain").textContent = g === Infinity ? "no direct pool" : `+${g.toFixed(2)}% more`;
+    $("dAlts").innerHTML = q.alts?.length ? `<span style="font-size:12px;color:var(--dim)">Next best</span>` + q.alts.slice(0, 3).map(r =>
+      `<div style="font-size:12px;color:var(--dim)"><span>${esc(r.router.label)} · ${esc(routeLabel(r))}</span><span>${fmt(r.out, S.to.decimals)}</span></div>`).join("") : "";
+  } else { $("rateLine").textContent = ""; $("details").classList.remove("show"); }
+
+  document.querySelectorAll("#slipSeg button").forEach(b => b.classList.toggle("on", +b.dataset.bps === S.slipBps));
+
+  const mb = $("mainBtn"); mb.disabled = false; mb.onclick = null;
+  if (!S.account) { mb.textContent = "Connect wallet"; mb.onclick = connect; }
+  else if (!S.chainOk) { mb.textContent = "Switch to PulseChain"; mb.onclick = switchChain; }
+  else if (S.from.address === S.to.address) { mb.textContent = "Select two different tokens"; mb.disabled = true; }
+  else if (S.amountIn === 0n) { mb.textContent = "Enter an amount"; mb.disabled = true; }
+  else if (S.quoting) { mb.innerHTML = '<span class="spin"></span> Finding best price…'; mb.disabled = true; }
+  else if (!q) { mb.textContent = S.quoteErr || "No route found"; mb.disabled = true; }
+  else if (fb != null && fb < S.amountIn) { mb.textContent = `Insufficient ${S.from.symbol} balance`; mb.disabled = true; }
+  else { mb.textContent = q.wrap ? (S.from.address === "native" ? "Review wrap" : "Review unwrap") : "Review swap"; mb.onclick = openReview; }
+  if (S.tab === "pools" && S.lpMode === "add") renderAdd();
+}
+function renderPortfolio(){
+  if (!S.account) { $("portfolio").innerHTML = '<div class="empty">Connect a wallet to see balances.</div>'; return; }
+  const rows = S.tokens.map(t => ({ t, b: bal(t) })).filter(x => x.b != null)
+    .sort((x, y) => (y.b > 0n) - (x.b > 0n));
+  $("portfolio").innerHTML = rows.length ? rows.map(({ t, b }) => `
+    <div class="row">${icon(t, 30)}<div class="grow"><div class="sym">${esc(t.symbol)}</div><div class="nm">${esc(t.name)}</div></div><div class="val" style="${b === 0n ? "color:var(--dim)" : ""}">${fmt(b, t.decimals, 4)}</div></div>`).join("")
+    : '<div class="empty"><span class="spin"></span> Loading…</div>';
+  if (S.positions?.length) {
+    $("portfolio").innerHTML += `<div class="nm" style="margin:14px 4px 4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Liquidity</div>` +
+      S.positions.map((p, i) => {
+        const t0 = tokenFor(p.a0), t1 = tokenFor(p.a1);
+        return `<div class="row" style="cursor:pointer" data-pos="${i}"><span class="pair-ico">${icon(t0, 24)}${icon(t1, 24)}</span><div class="grow"><div class="sym">${esc(t0.symbol)} / ${esc(t1.symbol)}</div><div class="nm">${esc(p.router.label)}</div></div><div class="val" style="font-size:12px">${fmt(p.lp * p.r0 / p.ts, t0.decimals, 2)} ${esc(t0.symbol)}<br>${fmt(p.lp * p.r1 / p.ts, t1.decimals, 2)} ${esc(t1.symbol)}</div></div>`;
+      }).join("");
+  }
+}
+$("portfolio").addEventListener("click", e => {
+  if (!e.target.closest("[data-pos]")) return;
+  document.querySelector('#tabs [data-tab="pools"]').click();
+});
+function renderActivity(){
+  $("activity").innerHTML = S.history.length ? S.history.slice(0, 8).map(h => `
+    <div class="row tx"><div class="grow"><a href="${CONFIG.explorer}/tx/${h.hash}" target="_blank" rel="noopener">${esc(h.label)}</a><div class="nm addr">${short(h.hash)}</div></div>
+    <span class="st ${h.status}">${h.status === "ok" ? "Done" : h.status === "fail" ? "Failed" : "Pending"}</span></div>`).join("")
+    : '<div class="empty">Your transactions from this session appear here.</div>';
+}
+function renderStatic(){
+  $("notices").innerHTML = CONFIG.notices.map(n => `<div class="notice"><strong>${esc(n.title)}</strong><p>${esc(n.body)}</p>${n.when ? `<div class="when">${esc(n.when)}</div>` : ""}</div>`).join("") || '<div class="empty">No updates yet.</div>';
+  const c = [...CONFIG.routers.flatMap(r => [[r.label + " router", r.address], [r.label + " factory", r.factory]]), ["WPLS", CONFIG.WPLS]];
+  $("contracts").innerHTML = c.map(([l, a]) => `<div class="row"><div class="grow"><div class="sym" style="font-size:13px">${esc(l)}</div></div><a class="addr" href="${CONFIG.explorer}/address/${a}" target="_blank" rel="noopener">${short(a)} ↗</a></div>`).join("");
+}
+document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dataset.close).classList.remove("show"));
+document.querySelectorAll(".scrim").forEach(s => s.addEventListener("click", e => { if (e.target === s && !S.busy) s.classList.remove("show"); }));
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !S.busy) document.querySelectorAll(".scrim.show").forEach(s => s.classList.remove("show")); });
+$("refreshBtn").onclick = refreshBalances;
+
+renderStatic(); render(); renderActivity();
+</script>
+</body>
+</html>
