@@ -148,6 +148,7 @@
   .hold-row .nm{font-size:12px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .hv{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--mute)}
   .hv b{font-size:15px;color:var(--ink);font-weight:500}
+  .hv .each{color:var(--faint)}
   .junk{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--mute);margin-top:10px}
   .lp-mode{width:100%;margin-top:14px}
   .lp-mode button{flex:1;padding:9px 12px;font-size:14px;font-weight:600}
@@ -461,7 +462,9 @@ const CONFIG = {
   holdings: {
     fromBlock: 17232000,   // PulseChain launch; coins copied from Ethereum are covered by always checking listed tokens
     maxRequests: 60,       // cap on history requests per wallet look-up
-    searchUnpriced: 12,    // coins with no main-token pool whose own pools get searched for a price
+    searchUnpriced: 12,
+    livePriceMax: 80,        // coins re-priced live after the first (index) numbers show
+    livePricePls: 1000,      // size of each live price check, in PLS worth    // coins with no main-token pool whose own pools get searched for a price
   },
   // pBank (with the owner's permission). Wallet holdings come from here first; if it can't be reached,
   // the page falls back to checking balances itself. If you change the site, also change connect-src at the top.
@@ -1454,6 +1457,9 @@ async function loadHoldings(force){
     const all = [...coins, ...more]; sortCoins(all);
     Object.assign(h, { coins: all, positions, scanning: false });
     holdCache.set(addr.toLowerCase(), { at: Date.now(), coins: all, positions, partial: false });
+    renderHoldings(); render();
+    liveRefresh(seq);
+    return;
   } catch (e) { console.warn("Holdings look-up failed:", e); if (seq !== h.seq) return; Object.assign(h, { loading: false, scanning: false, err: "Couldn't read this wallet. Check your connection and try again." }); }
   renderHoldings(); render();
 }
@@ -1499,7 +1505,58 @@ async function holdingsFromPbank(addr, seq, idxP){
   Object.assign(h, { coins, positions, loading: false, scanning: false, partial: false, deep: true, source: "pBank" });
   holdCache.set(addr.toLowerCase(), { at: Date.now(), coins, positions, partial: false, source: "pBank" });
   renderHoldings(); render();
+  if (IDX.price) liveRefresh(seq);
   return true;
+}
+
+/* live prices for holdings: the pool index gives instant first numbers, then every coin is re-priced by
+   quoting what a small amount (about 1,000 PLS worth) would really sell for right now, across both
+   PulseX versions and the best routes, the same way swaps are priced. */
+async function liveRefresh(seq){
+  const h = S.hold; if (!h.coins || seq !== h.seq) return;
+  const W = CONFIG.WPLS.toLowerCase(), cfg = CONFIG.holdings;
+  const toks = new Map();   // coin -> decimals
+  h.coins.filter(c => c.address !== "native" && c.pls != null).slice(0, cfg.livePriceMax).forEach(c => toks.set(c.address.toLowerCase(), c.tok.decimals));
+  (h.positions || []).forEach(p => [p.a0, p.a1].forEach(a => { const k = a.toLowerCase(); if (!toks.has(k)) toks.set(k, lpTok(a).decimals); }));
+  toks.delete(W);
+  h.refining = true; renderHoldings();
+  try {
+    const usdc = CONFIG.tokens.find(t => t.symbol === "USDC");
+    const jobs = [], owner = [], amts = new Map();
+    // one reference quote: 1,000 PLS -> bridged USDC, for the dollar figure
+    const onePls = 1000n * 10n ** 18n;
+    for (const r of CONFIG.routers) for (const p of [[CONFIG.WPLS, usdc.address], ...CONFIG.hops.filter(x => !eq(x, W) && !eq(x, usdc.address)).map(x => [CONFIG.WPLS, x, usdc.address])]) { jobs.push({ router: r, path: p, amt: onePls }); owner.push("$usd"); }
+    for (const [a, dec] of toks) {
+      const px = IDX.price?.get(a);                       // snapshot price, only used to size the test amount
+      const whole = px ? cfg.livePricePls / px : 1;
+      const amt = toRaw(whole.toFixed(Math.min(dec, 12)), dec) || 1n;
+      amts.set(a, { amt, whole: Number(ethers.formatUnits(amt, dec)) });
+      const paths = [[a, CONFIG.WPLS], ...CONFIG.hops.filter(x => !eq(x, W) && !eq(x, a)).map(x => [a, x, CONFIG.WPLS])];
+      for (const r of CONFIG.routers) for (const p of paths) { jobs.push({ router: r, path: p, amt }); owner.push(a); }
+      if (IDX.graphs) for (const [ri, G] of IDX.graphs) for (const p of searchGraph(G, a, W, amt, CONFIG.index.maxStops + 1, 2, 4)) { jobs.push({ router: CONFIG.routers[ri], path: p, amt }); owner.push(a); }
+    }
+    const res = await multiBig(jobs.map(j => ({ target: j.router.address, iface: routerIface, fn: "getAmountsOut", args: [j.amt, j.path] })));
+    if (seq !== h.seq) return;
+    const best = new Map();
+    res.forEach((r, i) => { const a = r?.[0]; const o = a && a.length ? a[a.length - 1] : null; if (o && o > 0n && (!best.has(owner[i]) || o > best.get(owner[i]))) best.set(owner[i], o); });
+    const usdPerPls = best.has("$usd") && usdc ? Number(ethers.formatUnits(best.get("$usd"), usdc.decimals)) / 1000 : IDX.usdPerPls;
+    const plsEach = new Map([[W, 1]]);                     // PLS per whole coin, live
+    for (const [a, { whole }] of amts) if (best.has(a) && whole > 0) plsEach.set(a, Number(ethers.formatUnits(best.get(a), 18)) / whole);
+    const valueOf = (a, bal, dec) => { const k = (a === "native" ? W : a.toLowerCase()); const e = plsEach.get(k); return e == null ? null : Number(ethers.formatUnits(bal, dec)) * e; };
+    for (const c of h.coins) {
+      const v = valueOf(c.address, c.bal, c.tok.decimals ?? 18);
+      if (v == null) continue;                              // no live quote: keep the snapshot figure
+      c.pls = plsWei(v); c.usd = usdPerPls ? v * usdPerPls : c.usd; c.live = true;
+    }
+    for (const p of h.positions || []) {
+      const v0 = valueOf(p.a0, p.amt0, lpTok(p.a0).decimals), v1 = valueOf(p.a1, p.amt1, lpTok(p.a1).decimals);
+      const v = v0 != null && v1 != null ? v0 + v1 : v0 != null ? v0 * 2 : v1 != null ? v1 * 2 : null;
+      if (v != null && usdPerPls) p.usd = v * usdPerPls;
+    }
+    sortCoins(h.coins); h.positions?.sort((x, y) => (y.usd ?? -1) - (x.usd ?? -1));
+    holdCache.set(h.addr.toLowerCase(), { at: Date.now(), coins: h.coins, positions: h.positions, partial: h.partial, source: h.source });
+  } catch (e) { console.warn("Live prices unavailable, showing index prices:", e); }
+  finally { if (seq === h.seq) { h.refining = false; renderHoldings(); render(); } }
 }
 
 async function deepScan(){
@@ -1522,9 +1579,12 @@ async function deepScan(){
     h.positions = [...(h.positions || []), ...positions];
     Object.assign(h, { deep: true, partial: budget.partial });
     holdCache.set(addr.toLowerCase(), { at: Date.now(), coins: h.coins, positions: h.positions, partial: h.partial });
-  } finally { h.deepRunning = false; renderHoldings(); render(); }
+  } finally { h.deepRunning = false; renderHoldings(); render(); if (IDX.price && seq === h.seq) liveRefresh(seq); }
 }
 const holdBal = t => { const c = S.hold.coins?.find(c => eq(c.address, t.address)); return c ? c.bal : (S.hold.coins ? 0n : null); };
+// price of one whole coin, in dollars
+function each(c){ const n = Number(ethers.formatUnits(c.bal, c.tok.decimals ?? 18)); const p = n > 0 ? c.usd / n : 0;
+  return !p ? "$0" : p >= 1 ? "$" + p.toLocaleString("en-US", { maximumFractionDigits: 2 }) : p >= 0.01 ? "$" + p.toFixed(4) : "$" + p.toPrecision(3); }
 function usd(n){ return n == null ? "" : n >= 1 ? "$" + n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 0 : 2 }) : n > 0 ? "<$1" : "$0"; }
 function renderHoldings(){
   const h = S.hold, box = $("holdList");
@@ -1545,14 +1605,15 @@ function renderHoldings(){
   box.innerHTML = (list.length ? list.map((c, i) => `<button class="hold-row" data-i="${h.coins.indexOf(c)}">
       ${icon(c.tok, 30)}
       <span class="grow"><span class="sym">${esc(c.tok.symbol)}${c.tok.found ? '<span class="tag">FOUND</span>' : ""}</span><span class="nm">${esc(c.tok.name)}</span></span>
-      <span class="hv"><b class="num">${fmt(c.bal, c.tok.decimals, 4)}</b><span>${c.pls != null ? usd(c.usd) || fmt(c.pls, 18, 0) + " PLS" : "no PulseX pool"}</span></span>
+      <span class="hv"><b class="num">${fmt(c.bal, c.tok.decimals, 4)}</b><span>${c.pls != null ? (usd(c.usd) || fmt(c.pls, 18, 0) + " PLS") + (c.usd != null ? ` <span class="each">· ${each(c)} each</span>` : "") : "no PulseX pool"}</span></span>
     </button>`).join("") : '<div class="empty">No coins with a PulseX pool found in this wallet.</div>')
     + (ps.length ? `<div class="lp-hd">Liquidity</div>` + ps.map((p, i) => posRow(p, i, "hold")).join("") : "")
     + (junk.length ? `<label class="junk"><input type="checkbox" id="junkTgl" ${h.showJunk ? "checked" : ""}> Show ${junk.length} coin${junk.length === 1 ? "" : "s"} with no PulseX pool (often airdropped spam)</label>` : "")
+    + (h.refining ? '<div class="empty"><span class="spin"></span> Updating to live prices…</div>' : "")
     + (h.scanning ? `<div class="empty"><span class="spin"></span> Checking ${h.scanning.toLocaleString("en-US")} more coins and pools…</div>` : "")
     + (!h.scanning && !h.deep && IDX.price ? `<div class="empty">Showing every coin with a PulseX pool over $${CONFIG.index.minPoolUsd}. <button type="button" class="linkish" id="deepBtn" style="margin:0">${h.deepRunning ? '<span class="spin"></span> Searching full history…' : "Search full history for others (slower)"}</button></div>` : "")
     + (h.partial ? '<div class="warnbox w">The price server limited the search, so some coins may be missing.</div>' : "")
-    + (h.source === "pBank" ? '<div class="empty">Balances from pBank. Prices from PulseX pools.</div>' : "");
+    + (h.source === "pBank" ? `<div class="empty">Balances from pBank. ${h.refining ? "Prices from PulseX pools." : "Live prices from PulseX."}</div>` : "");
   if ($("junkTgl")) $("junkTgl").onchange = e => { h.showJunk = e.target.checked; renderHoldings(); };
   if ($("deepBtn")) $("deepBtn").onclick = deepScan;
   renderPositions();
