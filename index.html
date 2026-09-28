@@ -294,8 +294,8 @@
     <span id="appName">Layer2</span>
   </div>
   <div class="trade-on" id="targetCard" role="group" aria-labelledby="tradeOnLbl">
-    <span class="lbl" id="tradeOnLbl">Trade on PulseX</span>
-    <div class="seg" id="targetSeg"><button data-t="online">Online</button><button data-t="local">This computer</button></div>
+    <span class="lbl" id="tradeOnLbl">Run PulseX</span>
+    <div class="seg" id="targetSeg"><button data-t="local">Local</button><button data-t="online">pulsex.mypinata.cloud</button></div>
     <div id="targetNote"></div>
   </div>
   <div class="status" title="Price feed status"><span class="dot" id="netDot"></span><span id="netLabel">PulseChain</span></div>
@@ -450,7 +450,8 @@ const CONFIG = {
   // Content-Security-Policy at the top of the file to match, or reads will be blocked.
   rpc: "https://rpc.pulsechain.com",
   explorer: "https://scan.pulsechain.com",     // only used for links the visitor chooses to click
-  // Where trades are handed off. IPFS copies use "#/" links; set hashRouting to false for app.pulsex.com.
+  // Where trades are handed off ("pulsex.mypinata.cloud" in the header switch): PulseX's IPFS copy.
+  // IPFS copies use "#/" links; for app.pulsex.com use its address and set pulsexHashRouting to false.
   pulsex: "https://pulsex.mypinata.cloud/ipfs/bafybeicn3lj4oandfaufxsjgu6hevu4gyp5dhxpbajurglrsrlsbv7jipi/",
   pulsexHashRouting: true,
   // Optional: the PulseX desktop server (pulsex-server.exe) that runs on the visitor's own computer.
@@ -1739,7 +1740,7 @@ function renderTarget(){
   $("targetNote").innerHTML = local
     ? `Start pulsex-server.exe first. Opens <span class="addr">${esc(CONFIG.pulsexLocal.replace(/^https?:\/\//, ""))}</span>`
     : "";
-  $("targetSeg").title = "Where the PulseX buttons open: the online app, or pulsex-server.exe running on this computer (use only the copy from PulseChain's official GitLab).";
+  $("targetSeg").title = "Where the PulseX buttons open: PulseX's IPFS copy at pulsex.mypinata.cloud, or PulseX running locally on this computer through pulsex-server.exe (use only the copy from PulseChain's official GitLab).";
 }
 $("targetSeg").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
