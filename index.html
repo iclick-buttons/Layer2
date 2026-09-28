@@ -7,7 +7,7 @@
   PulseChain RPC below (the CSP allows nothing else), and hands the actual
   trade off to PulseX, where the person connects and signs as usual.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https://dexdenom.com; font-src 'none'; connect-src https://rpc.pulsechain.com https://graph.pulsechain.com; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https://dexdenom.com; font-src 'none'; connect-src https://rpc.pulsechain.com https://graph.pulsechain.com https://pbank.info; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
@@ -462,10 +462,10 @@ const CONFIG = {
     maxRequests: 60,       // cap on history requests per wallet look-up
     searchUnpriced: 12,    // coins with no main-token pool whose own pools get searched for a price
   },
-  // pBank (with the owner's permission). Fill these in to switch on:
-  //   walletLink:  their page for one wallet, e.g. "https://pbank.info/…{address}…", shown as "Open in pBank"
-  //   holdingsApi: their data endpoint, to replace the on-chain look-up (also add it to connect-src at the top)
-  pbank: { walletLink: "", holdingsApi: "" },
+  // pBank (with the owner's permission). Wallet holdings come from here first; if it can't be reached,
+  // the page falls back to checking balances itself. If you change the site, also change connect-src at the top.
+  //   walletLink: optional, pBank's page for one wallet ("…{address}…"), shown as "Open in pBank"
+  pbank: { holdingsApi: "https://pbank.info/api/balances?address={address}", walletLink: "", timeoutMs: 10000 },
   pulsexLocalHashRouting: true,
   blockImpactPct: 15,
 
@@ -756,6 +756,7 @@ async function loadIndex(force){
   if (IDX.loading) return IDX.loading;
   IDX.loading = (async () => {
     const graphs = new Map(); let pools = 0;
+    const plist = [], toks = new Map();   // every indexed pool, and each coin's symbol/decimals
     await Promise.all(cfg.sources.map(async src => {
       const G = new Map(); let last = "";
       for (let page = 0; page < cfg.maxPages; page++) {
@@ -769,6 +770,9 @@ async function loadIndex(force){
           G.get(a).push({ to: b, rIn: r0, rOut: r1 }); G.get(b).push({ to: a, rIn: r1, rOut: r0 });
           if (!META[a] && p.token0.symbol) META[a] = String(p.token0.symbol).slice(0, 12);
           if (!META[b] && p.token1.symbol) META[b] = String(p.token1.symbol).slice(0, 12);
+          toks.set(a, { symbol: String(p.token0.symbol || "").slice(0, 16), decimals: +p.token0.decimals });
+          toks.set(b, { symbol: String(p.token1.symbol || "").slice(0, 16), decimals: +p.token1.decimals });
+          plist.push({ id: p.id.toLowerCase(), ri: src.router, a, b, ra: Number(p.reserve0), rb: Number(p.reserve1) });
           pools++;
         }
         if (list.length < 1000) break;
@@ -776,11 +780,35 @@ async function loadIndex(force){
       }
       graphs.set(src.router, G);
     }));
-    Object.assign(IDX, { graphs, pools, at: Date.now(), ok: true, err: null });
+    const price = widestPrices(plist);
+    const usdc = CONFIG.tokens.find(t => t.symbol === "USDC");
+    const up = usdc && price.get(usdc.address.toLowerCase());
+    Object.assign(IDX, { graphs, pools, plist, toks, price, usdPerPls: up ? 1 / up : null, at: Date.now(), ok: true, err: null });
     return IDX;
   })().catch(e => { IDX.err = String(e.message || e); IDX.ok = !!IDX.graphs; return IDX.graphs ? IDX : null; })
       .finally(() => { IDX.loading = null; renderRoute(); });
   return IDX.loading;
+}
+/* A price in PLS for every indexed coin. Each coin is priced through the path from PLS whose
+   thinnest pool is as deep as possible, so a tiny or manipulated pool can't set a coin's price. */
+function widestPrices(plist){
+  const adj = new Map(), add = (x, y, rx, ry) => { if (!adj.has(x)) adj.set(x, []); adj.get(x).push([y, rx, ry]); };
+  for (const p of plist) if (p.ra > 0 && p.rb > 0) { add(p.a, p.b, p.ra, p.rb); add(p.b, p.a, p.rb, p.ra); }
+  const W = CONFIG.WPLS.toLowerCase(), price = new Map([[W, 1]]), width = new Map([[W, Infinity]]);
+  const heap = [[Infinity, W]];   // max-heap on width
+  const push = it => { heap.push(it); let i = heap.length - 1; while (i) { const j = (i - 1) >> 1; if (heap[j][0] >= heap[i][0]) break; [heap[i], heap[j]] = [heap[j], heap[i]]; i = j; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] > heap[m][0]) m = l; if (r < heap.length && heap[r][0] > heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
+  const done = new Set();
+  while (heap.length) {
+    const [w, x] = pop(); if (done.has(x)) continue; done.add(x);
+    const px = price.get(x);
+    for (const [y, rx, ry] of adj.get(x) || []) {
+      if (done.has(y)) continue;
+      const nw = Math.min(w, rx * px);            // depth of this pool, in PLS, on the known side
+      if (nw > (width.get(y) ?? -1)) { width.set(y, nw); price.set(y, px * rx / ry); push([nw, y]); }
+    }
+  }
+  return price;
 }
 // PulseX charges 0.29% per pool
 const simOut = (amt, rIn, rOut) => { const a = amt * 9971n; return a * rOut / (rIn * 10000n + a); };
@@ -1240,12 +1268,9 @@ async function valuesInPls(coins){
     if (u) coins.forEach(c => { if (c.pls != null) c.usd = Number(ethers.formatUnits(c.pls * u / one, usdc.decimals)); });
   }
 }
-async function loadHoldings(force){
-  const h = S.hold, addr = h.addr; if (!addr) return;
-  const seq = ++h.seq;
-  const hit = holdCache.get(addr.toLowerCase());
-  if (!force && hit && Date.now() - hit.at < 5 * 60000) { Object.assign(h, { coins: hit.coins, positions: hit.positions, partial: hit.partial, loading: false, err: null }); renderHoldings(); render(); return; }
-  Object.assign(h, { loading: true, err: null }); renderHoldings();
+// fallback when the pool index is unavailable: search transfer history, then quote each coin
+async function legacyLoadHoldings(seq){
+  const h = S.hold, addr = h.addr;
   try {
     const budget = { left: CONFIG.holdings.maxRequests, partial: false };
     const found = await receivedTokens(addr, budget).catch(() => { budget.partial = true; return []; });
@@ -1267,15 +1292,157 @@ async function loadHoldings(force){
         META[x.a] = META[x.a] || tok.symbol; }
       coins.push({ address: tok.address, tok, bal: x.bal });
     });
-    await valuesInPls(coins);
+    await priceAny(coins);
     // PLS always first, then highest dollar value down; coins with no price go last
     const worth = c => c.usd ?? (c.pls != null ? Number(ethers.formatUnits(c.pls, 18)) * 1e-12 : -1);
     coins.sort((x, y) => (y.address === "native") - (x.address === "native") || worth(y) - worth(x));
     if (seq !== h.seq) return;
-    Object.assign(h, { coins, positions, partial: budget.partial, loading: false });
+    Object.assign(h, { coins, positions, partial: budget.partial, loading: false, deep: true });
     holdCache.set(addr.toLowerCase(), { at: Date.now(), coins, positions, partial: budget.partial });
   } catch (e) { console.warn("Holdings look-up failed:", e); if (seq !== h.seq) return; Object.assign(h, { loading: false, err: "Couldn't read this wallet. Check your connection and try again." }); }
   renderHoldings(); render();
+}
+/* prices from the pool index: instant, no extra requests */
+const plsWei = x => x > 1e15 ? BigInt(Math.round(x)) * 10n ** 18n : BigInt(Math.round(x * 1e6)) * 10n ** 12n;
+function priceFromIndex(coins){
+  for (const c of coins) {
+    const a = (c.address === "native" ? CONFIG.WPLS : c.address).toLowerCase();
+    const px = IDX.price?.get(a); if (px == null || !isFinite(px)) continue;
+    const dec = c.tok?.decimals ?? IDX.toks.get(a)?.decimals ?? findTok(a)?.decimals ?? LPMETA[a]?.decimals ?? 18;
+    const v = Number(ethers.formatUnits(c.bal, dec)) * px;
+    if (!isFinite(v)) continue;
+    c.pls = plsWei(v); if (IDX.usdPerPls) c.usd = v * IDX.usdPerPls;
+  }
+}
+const priceAny = async coins => IDX.price ? priceFromIndex(coins) : valuesInPls(coins);
+// big balance checks: large batches, a few at a time, so the public price server isn't flooded
+async function multiBig(calls, chunk = 400, parallel = 6){
+  const out = new Array(calls.length).fill(null); let next = 0;
+  const worker = async () => { while (next < calls.length) { const s = next; next += chunk;
+    const r = await multi(calls.slice(s, s + chunk)).catch(() => []); r.forEach((v, i) => { out[s + i] = v; }); } };
+  // multi() splits into its own 100-call requests; run a few chunks side by side
+  await Promise.all(Array.from({ length: parallel }, worker));
+  return out;
+}
+function tokFromIndex(a){
+  const t = findTok(a); if (t) return t;
+  const m = IDX.toks?.get(a);
+  return { symbol: m?.symbol || short(a), name: "", address: ethers.getAddress(a), decimals: m?.decimals ?? 18, found: true };
+}
+function sortCoins(coins){
+  const worth = c => c.usd ?? (c.pls != null ? Number(ethers.formatUnits(c.pls, 18)) * 1e-12 : -1);
+  coins.sort((x, y) => (y.address === "native") - (x.address === "native") || worth(y) - worth(x));
+}
+async function loadHoldings(force){
+  const h = S.hold, addr = h.addr; if (!addr) return;
+  const seq = ++h.seq;
+  const hit = holdCache.get(addr.toLowerCase());
+  if (!force && hit && Date.now() - hit.at < 5 * 60000) { Object.assign(h, { coins: hit.coins, positions: hit.positions, partial: hit.partial, source: hit.source, loading: false, scanning: false, err: null }); renderHoldings(); render(); return; }
+  Object.assign(h, { loading: true, scanning: false, err: null, deep: false, source: null }); renderHoldings();
+  const idxP = Promise.race([loadIndex(), new Promise(r => setTimeout(() => r(null), CONFIG.index.waitMs))]).catch(() => null);
+  if (CONFIG.pbank?.holdingsApi) {
+    try { if (await holdingsFromPbank(addr, seq, idxP)) return; }
+    catch (e) { console.warn("pBank unavailable, checking balances directly:", e); }
+  }
+  const idx = await idxP;
+  if (!idx?.price) return legacyLoadHoldings(seq);
+  try {
+    // 1) main + imported coins and PLS: one request, shown straight away
+    const listed = S.tokens.filter(t => t.address !== "native").map(t => t.address.toLowerCase());
+    const r1 = await multi([{ target: CONFIG.multicall, iface: MC_ETH, fn: "getEthBalance", args: [addr] }, ...listed.map(a => ({ target: a, iface: ercIface, fn: "balanceOf", args: [addr] }))]);
+    if (seq !== h.seq) return;
+    const coins = [];
+    if (r1[0]?.[0] > 0n) coins.push({ address: "native", tok: findTok("native"), bal: r1[0][0] });
+    listed.forEach((a, i) => { const b = r1[i + 1]?.[0]; if (b > 0n) { const t = findTok(a); coins.push({ address: t.address, tok: t, bal: b }); } });
+    priceFromIndex(coins); sortCoins(coins);
+    const toCheck = [...idx.toks.keys()].filter(a => !listed.includes(a));
+    Object.assign(h, { coins, positions: [], loading: false, scanning: toCheck.length + idx.plist.length, partial: false }); renderHoldings(); render();
+
+    // 2) every other coin with a pool over the floor, and every pool token: a few large batches
+    const pairs = idx.plist;
+    const r2 = await multiBig([...toCheck.map(a => ({ target: a, iface: ercIface, fn: "balanceOf", args: [addr] })),
+                               ...pairs.map(p => ({ target: p.id, iface: ercIface, fn: "balanceOf", args: [addr] }))]);
+    if (seq !== h.seq) return;
+    const more = [];
+    toCheck.forEach((a, i) => { const b = r2[i]?.[0]; if (b > 0n) more.push({ address: ethers.getAddress(a), tok: tokFromIndex(a), bal: b }); });
+    const heldPairs = pairs.map((p, i) => ({ a: p.id, bal: r2[toCheck.length + i]?.[0] })).filter(x => x.bal > 0n);
+    // names for newly found coins (symbol + decimals already came with the index)
+    if (more.length) { const nm = await multi(more.map(c => ({ target: c.address, iface: ercIface, fn: "name" }))); more.forEach((c, i) => { if (nm[i]) c.tok.name = String(nm[i][0]).slice(0, 48); }); }
+    priceFromIndex(more);
+    const { positions } = await splitPositions(heldPairs).catch(() => ({ positions: [] }));
+    if (seq !== h.seq) return;
+    const all = [...coins, ...more]; sortCoins(all);
+    Object.assign(h, { coins: all, positions, scanning: false });
+    holdCache.set(addr.toLowerCase(), { at: Date.now(), coins: all, positions, partial: false });
+  } catch (e) { console.warn("Holdings look-up failed:", e); if (seq !== h.seq) return; Object.assign(h, { loading: false, scanning: false, err: "Couldn't read this wallet. Check your connection and try again." }); }
+  renderHoldings(); render();
+}
+// optional: search the wallet's whole transfer history for coins that have no pool over the floor
+/* pBank (used with the owner's permission): one request returns every coin the wallet holds.
+   Everything in the reply is treated as untrusted data: addresses are checked, numbers parsed safely, text escaped on display. */
+async function fromPbank(addr){
+  const url = CONFIG.pbank.holdingsApi.replace("{address}", addr);
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), CONFIG.pbank.timeoutMs);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, credentials: "omit", referrerPolicy: "no-referrer" });
+    if (!r.ok) throw new Error("pBank " + r.status);
+    const j = await r.json();
+    if (!j || !Array.isArray(j.tokens)) throw new Error("unexpected pBank reply");
+    const big = v => { try { const b = BigInt(v); return b > 0n ? b : 0n; } catch { return 0n; } };
+    const list = [];
+    for (const x of j.tokens) {
+      const tk = x?.token; if (!tk || tk.type !== "ERC-20" || !ethers.isAddress(tk.address)) continue;
+      const bal = big(x.value); if (bal === 0n) continue;
+      const dec = Math.min(36, Math.max(0, parseInt(tk.decimals, 10) || 0));
+      list.push({ a: tk.address.toLowerCase(), bal, symbol: String(tk.symbol ?? "").slice(0, 16), name: String(tk.name ?? "").slice(0, 48), decimals: isNaN(parseInt(tk.decimals, 10)) ? 18 : dec });
+    }
+    return { pls: big(j.plsBalance), list };
+  } finally { clearTimeout(t); }
+}
+async function holdingsFromPbank(addr, seq, idxP){
+  const h = S.hold;
+  const [pb, idx] = await Promise.all([fromPbank(addr), idxP]);
+  if (seq !== h.seq) return true;
+  const byAddr = new Map(pb.list.map(x => [x.a, x]));
+  // pool tokens: anything whose contract answers as a PulseX pool
+  const { positions, rest } = await splitPositions(pb.list.map(x => ({ a: x.a, bal: x.bal }))).catch(() => ({ positions: [], rest: pb.list.map(x => ({ a: x.a, bal: x.bal })) }));
+  const coins = [];
+  if (pb.pls > 0n) coins.push({ address: "native", tok: findTok("native"), bal: pb.pls });
+  for (const x of rest) {
+    const m = byAddr.get(x.a), known = findTok(x.a);
+    const tok = known || { symbol: m.symbol || short(x.a), name: m.name, address: ethers.getAddress(x.a), decimals: m.decimals, found: true };
+    if (!known) META[x.a] = META[x.a] || tok.symbol;
+    coins.push({ address: tok.address, tok, bal: x.bal });
+  }
+  await priceAny(coins); sortCoins(coins);
+  if (seq !== h.seq) return true;
+  Object.assign(h, { coins, positions, loading: false, scanning: false, partial: false, deep: true, source: "pBank" });
+  holdCache.set(addr.toLowerCase(), { at: Date.now(), coins, positions, partial: false, source: "pBank" });
+  renderHoldings(); render();
+  return true;
+}
+
+async function deepScan(){
+  const h = S.hold, addr = h.addr; if (!addr || h.deepRunning) return;
+  const seq = h.seq; h.deepRunning = true; renderHoldings();
+  try {
+    const budget = { left: CONFIG.holdings.maxRequests, partial: false };
+    const found = await receivedTokens(addr, budget).catch(() => { budget.partial = true; return []; });
+    const have = new Set((h.coins || []).map(c => c.address.toLowerCase()).concat((h.positions || []).map(p => p.pair.toLowerCase())));
+    const fresh = found.filter(a => !have.has(a));
+    const res = await multi(fresh.map(a => ({ target: a, iface: ercIface, fn: "balanceOf", args: [addr] })));
+    const held = fresh.map((a, i) => ({ a, bal: res[i]?.[0] })).filter(x => x.bal > 0n);
+    const { positions, rest } = await splitPositions(held).catch(() => ({ positions: [], rest: held }));
+    const meta = await multi(rest.flatMap(x => ["symbol", "name", "decimals"].map(fn => ({ target: x.a, iface: ercIface, fn }))));
+    const more = rest.map((x, k) => ({ address: ethers.getAddress(x.a), bal: x.bal,
+      tok: { symbol: String(meta[k * 3]?.[0] ?? short(x.a)).slice(0, 16), name: String(meta[k * 3 + 1]?.[0] ?? "").slice(0, 48), address: ethers.getAddress(x.a), decimals: meta[k * 3 + 2] ? Number(meta[k * 3 + 2][0]) : 18, found: true } }));
+    priceFromIndex(more);
+    if (seq !== h.seq) return;
+    h.coins = [...h.coins, ...more]; sortCoins(h.coins);
+    h.positions = [...(h.positions || []), ...positions];
+    Object.assign(h, { deep: true, partial: budget.partial });
+    holdCache.set(addr.toLowerCase(), { at: Date.now(), coins: h.coins, positions: h.positions, partial: h.partial });
+  } finally { h.deepRunning = false; renderHoldings(); render(); }
 }
 const holdBal = t => { const c = S.hold.coins?.find(c => eq(c.address, t.address)); return c ? c.bal : (S.hold.coins ? 0n : null); };
 function usd(n){ return n == null ? "" : n >= 1 ? "$" + n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 0 : 2 }) : n > 0 ? "<$1" : "$0"; }
@@ -1286,7 +1453,7 @@ function renderHoldings(){
   if (CONFIG.pbank?.walletLink && h.addr) $("pbankLink").href = CONFIG.pbank.walletLink.replace("{address}", h.addr);
   renderPositions();
   if (!h.addr) { box.innerHTML = '<div class="empty">Paste a wallet address to see its coins. Only the public address is needed. Never paste a seed phrase or private key anywhere.</div>'; $("holdTotal").textContent = ""; return; }
-  if (h.loading) { box.innerHTML = '<div class="empty"><span class="spin"></span> Searching the blockchain for coins this wallet holds…</div>'; return; }
+  if (h.loading) { box.innerHTML = '<div class="empty"><span class="spin"></span> Loading balances…</div>'; return; }
   if (h.err) { box.innerHTML = `<div class="warnbox b">${esc(h.err)}</div>`; return; }
   if (!h.coins) { box.innerHTML = ""; return; }
   const real = h.coins.filter(c => c.pls != null), junk = h.coins.filter(c => c.pls == null);
@@ -1302,8 +1469,12 @@ function renderHoldings(){
     </button>`).join("") : '<div class="empty">No coins with a PulseX pool found in this wallet.</div>')
     + (ps.length ? `<div class="lp-hd">Liquidity</div>` + ps.map((p, i) => posRow(p, i, "hold")).join("") : "")
     + (junk.length ? `<label class="junk"><input type="checkbox" id="junkTgl" ${h.showJunk ? "checked" : ""}> Show ${junk.length} coin${junk.length === 1 ? "" : "s"} with no PulseX pool (often airdropped spam)</label>` : "")
-    + (h.partial ? '<div class="warnbox w">The price server limited the search, so some coins may be missing.</div>' : "");
+    + (h.scanning ? `<div class="empty"><span class="spin"></span> Checking ${h.scanning.toLocaleString("en-US")} more coins and pools…</div>` : "")
+    + (!h.scanning && !h.deep && IDX.price ? `<div class="empty">Showing every coin with a PulseX pool over $${CONFIG.index.minPoolUsd}. <button type="button" class="linkish" id="deepBtn" style="margin:0">${h.deepRunning ? '<span class="spin"></span> Searching full history…' : "Search full history for others (slower)"}</button></div>` : "")
+    + (h.partial ? '<div class="warnbox w">The price server limited the search, so some coins may be missing.</div>' : "")
+    + (h.source === "pBank" ? '<div class="empty">Balances from pBank. Prices from PulseX pools.</div>' : "");
   if ($("junkTgl")) $("junkTgl").onchange = e => { h.showJunk = e.target.checked; renderHoldings(); };
+  if ($("deepBtn")) $("deepBtn").onclick = deepScan;
   renderPositions();
 }
 $("holdForm").addEventListener("submit", e => {
@@ -1366,7 +1537,7 @@ async function splitPositions(held){
   u.forEach((a, i) => { LPMETA[a] = { symbol: String(m[i * 3]?.[0] ?? short(a)).slice(0, 16), name: String(m[i * 3 + 1]?.[0] ?? "").slice(0, 48), decimals: m[i * 3 + 2] ? Number(m[i * 3 + 2][0]) : 18 }; });
   // value both halves; if one side has no price, the pool's own ratio means the other half is worth the same
   const sides = positions.flatMap(p => [{ address: p.a0, bal: p.amt0, p }, { address: p.a1, bal: p.amt1, p }]).filter(s => s.bal > 0n);
-  await valuesInPls(sides);
+  await priceAny(sides);
   positions.forEach(p => {
     const [s0, s1] = [sides.find(s => s.p === p && eq(s.address, p.a0)), sides.find(s => s.p === p && eq(s.address, p.a1))];
     const u0 = s0?.usd, u1 = s1?.usd;
