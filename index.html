@@ -472,6 +472,8 @@ const CONFIG = {
   pbank: { holdingsApi: "https://pbank.info/api/balances?address={address}", walletLink: "", timeoutMs: 10000 },
   pulsexLocalHashRouting: true,
   blockImpactPct: 15,
+  maxImpactPct: 15,          // routes that would move the price more than this are never suggested
+  impactChecks: 30,          // best routes checked for price impact per quote
 
   routers: [
     { label: "PulseX V2", address: "0x165C3410fC91EF562C50559f7d2289fEbed552d9", factory: "0x29eA7545DEf87022BAdc76323F373EA1e707C523" },
@@ -945,17 +947,25 @@ async function getQuote(a, b, amt){
   if (!results.length) return null;
   const score = r => r.out * BigInt(10000 - CONFIG.hopPenaltyBps * (r.path.length - 2)) / 10000n;
   results.sort((x, y) => { const d = score(y) - score(x); return d > 0n ? 1 : d < 0n ? -1 : 0; });
-  const t = await testRoutes(A, results);
+  // price impact per route: its rate for this amount against its rate for a tiny amount.
+  // Anything over the limit is dropped, so a thin pool can never be suggested.
+  const top = results.slice(0, CONFIG.impactChecks);
+  let small = amt / 10000n; if (small === 0n) small = 1n;
+  const smalls = await quoteMany(top.map(r => ({ router: r.router, path: r.path, amt: small })));
+  top.forEach((r, i) => { const o = smalls[i]; r.impact = o && o > 0n ? Math.max(0, (1 - Number((r.out * small * 1000000n) / (o * amt)) / 1e6) * 100) : null; });
+  const okImpact = top.filter(r => r.impact != null && r.impact <= CONFIG.maxImpactPct);
+  if (!okImpact.length) {
+    const seen = top.filter(r => r.impact != null).map(r => r.impact);
+    return { tooMuchImpact: true, minImpact: seen.length ? Math.min(...seen) : null };
+  }
+  const t = await testRoutes(A, okImpact);
   if (!t.results.length) return { allFailed: true, test: t.info };
   const ranked = t.results, best = ranked[0];
   const direct = ranked.filter(r => r.path.length === 2).sort((x, y) => (y.out > x.out ? 1 : y.out < x.out ? -1 : 0))[0];
   let gainVsDirect = null, noDirect = false;
   if (!direct) noDirect = true;
   else if (direct !== best) gainVsDirect = Number((best.out - direct.out) * 1000000n / direct.out) / 10000;
-  let impact = null, small = amt / 10000n; if (small === 0n) small = 1n;
-  const [outSmall] = await quoteMany([{ router: best.router, path: best.path, amt: small }]);
-  const paperOut = best.rawOut ?? best.out;   // compare like with like: price impact is about pool depth, not tax
-  if (outSmall && outSmall > 0n) impact = Math.max(0, (1 - Number((paperOut * small * 1000000n) / (outSmall * amt)) / 1e6) * 100);
+  const impact = best.impact;   // measured on paper outputs before any tax adjustment: impact is about pool depth
   return { ...best, impact, checked: jobs.length, found: ranked.length, foundHere: best.found, alts: ranked.slice(1, 4), test: t.info, gainVsDirect, noDirect, disc: disc.info, index: ix.info };
 }
 // the coins to blame: in-between coins that appear on failed routes but on none that passed
@@ -968,13 +978,14 @@ function routeLabel(r){ return r.path.map(symOf).join(" → "); }
 let qTimer;
 function scheduleQuote(){
   clearTimeout(qTimer);
-  S.quote = null; S.quoteErr = null;
+  S.quote = null; S.quoteErr = null; S.quoteNote = null; S.impactNote = null;
   if (S.amountIn === 0n || S.from.address === S.to.address) { S.quoting = false; render(); return; }
   S.quoting = true; render();
   const seq = ++S.seq;
   qTimer = setTimeout(async () => {
     try { const q = await getQuote(S.from, S.to, S.amountIn); if (seq !== S.seq) return;
-      if (q?.allFailed) { S.quote = null; S.quoteErr = "Every route failed its test run"; S.quoteNote = q.test; } else { S.quote = q; S.quoteNote = null; if (!q) S.quoteErr = "No liquidity route"; } }
+      if (q?.tooMuchImpact) { S.quote = null; S.quoteErr = "Price impact too high"; S.quoteNote = null; S.impactNote = q; }
+      else if (q?.allFailed) { S.quote = null; S.quoteErr = "Every route failed its test run"; S.quoteNote = q.test; S.impactNote = null; } else { S.impactNote = null; S.quote = q; S.quoteNote = null; if (!q) S.quoteErr = "No liquidity route"; } }
     catch { if (seq === S.seq) S.quoteErr = "Couldn't load prices. Try again."; }
     if (seq === S.seq) { S.quoting = false; render(); }
   }, 350);
@@ -1154,6 +1165,7 @@ function render(){
   } else {
     $("rateLine").textContent = ""; $("details").classList.remove("show");
     // every route failed: the coin they all share is the one being sold (buying it for the test worked, selling it didn't)
+    if (S.impactNote && !S.quoting) impactWarn = `<div class="warnbox b">Every route would move the price by more than ${CONFIG.maxImpactPct}%${S.impactNote.minImpact != null ? ` (the best is ${S.impactNote.minImpact.toFixed(1)}%)` : ""}, so none is suggested. The pools for this pair are too thin for this amount. Try a smaller amount.</div>`;
     if (S.quoteNote && !S.quoting) impactWarn = `<div class="warnbox b">Every route failed its test run. <b>${esc(S.from.symbol)}</b> could be bought but not sold into any PulseX pool, so it likely blocks sales${S.to.address === "native" || isHub(pathAddr(S.to)) ? "" : ` (or <b>${esc(S.to.symbol)}</b> blocks buying)`}. This swap would fail.</div>`;
   }
   const fb = holdBal(S.from);
