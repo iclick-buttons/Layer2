@@ -251,6 +251,19 @@
   .tok-item{display:flex;align-items:center;gap:12px;padding:9px 8px;width:100%;text-align:left;border-left:2px solid transparent}
   .tok-item:hover{background:rgba(70,230,255,.06);border-left-color:var(--ion)}
   .tok-item.sel{opacity:.35;pointer-events:none}
+  .field-hd{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .ca-btn{display:inline-flex;align-items:center;gap:4px;margin-left:8px;padding:1px 5px;border:1px solid var(--line2);color:var(--mute);cursor:pointer;vertical-align:1px;font-weight:400;white-space:nowrap}
+  .ca-btn .addr{font-size:11px}
+  .ca-btn:hover,.ca-btn:focus-visible{color:var(--ion);border-color:var(--ion)}
+  .ca-btn.copied{color:var(--ok);border-color:var(--ok)}
+  .ca-btn.ca-icon{flex:none;justify-content:center;width:28px;height:28px;padding:0;margin-left:6px;border-color:transparent;color:var(--faint)}
+  .ca-btn.ca-icon svg{width:14px;height:14px}
+  .ca-btn.ca-icon:hover,.ca-btn.ca-icon:focus-visible{border-color:var(--ion);color:var(--ion)}
+  .ca-txt{font-size:11px;color:var(--faint)}
+  .ca-sp{flex:none;width:34px}
+  .field-hd .ca-btn{margin-left:0}
+  .pool-cas{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--mute)}
+  .pool-ca .ca-btn{margin-left:4px}
   .pick-hd{font:600 12px/1 var(--display);letter-spacing:.05em;color:var(--mute);padding:12px 8px 6px}
   .pick-bal{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--mute)}
   .pick-bal b{font-size:14px;color:var(--ink);font-weight:500}
@@ -324,7 +337,7 @@
 
     <div id="swapView">
       <div class="field">
-        <div class="field-label">You pay</div>
+        <div class="field-label field-hd"><span>You pay</span><span id="fromCa"></span></div>
         <div class="field-row">
           <input class="amt" id="amtIn" placeholder="0" inputmode="decimal" autocomplete="off" aria-label="Amount you pay">
           <button class="tok-btn" id="fromBtn"></button>
@@ -337,7 +350,7 @@
       </button></div>
 
       <div class="field">
-        <div class="field-label">You receive, estimated</div>
+        <div class="field-label field-hd"><span>You receive, estimated</span><span id="toCa"></span></div>
         <div class="field-row">
           <input class="amt" id="amtOut" placeholder="0" readonly aria-label="Estimated amount you receive">
           <button class="tok-btn" id="toBtn"></button>
@@ -365,6 +378,7 @@
       <div class="field">
         <div class="field-row"><span class="field-label" style="margin:0">Pick a pool</span><div class="seg" id="verSeg"><button data-v="0">V2</button><button data-v="1">V1</button></div></div>
         <div class="pool-pick"><button class="tok-btn" id="lpABtn"></button><span class="plus">+</span><button class="tok-btn" id="lpBBtn"></button></div>
+        <div class="pool-cas" id="lpCas"></div>
       </div>
       <div id="lpInfo"></div>
       <div class="seg lp-mode" id="lpModeSeg" role="group" aria-label="Add or remove liquidity"><button data-m="add" class="on">Add liquidity</button><button data-m="remove">Remove liquidity</button></div>
@@ -478,6 +492,7 @@ const CONFIG = {
     dexscreener: { url: "https://api.dexscreener.com/tokens/v1/pulsechain/{addresses}", batch: 30 },
     dexdenom:    { url: "", batch: 100 },   // e.g. "https://dexdenom.com/api/prices?addresses={addresses}"
     minLiquidityUsd: 100,      // pools with less liquidity than this can't set a coin's price (same floor as the pool index)
+    minShowUsd: 1,             // holdings and pool positions worth less than this are tucked behind a "show" toggle
     cacheSeconds: 30,
     timeoutMs: 8000,
   },
@@ -643,6 +658,28 @@ document.addEventListener("error", e => {
   el.parentElement?.classList.remove("has-logo");   // bring back the lettered hexagon
   el.remove();
 }, true);
+// copy-the-contract-address chip (a span, so it can sit inside other clickable rows)
+function caChip(t, iconOnly){
+  if (!t || t.address === "native" || !ethers.isAddress(t.address)) return "";
+  const a = ethers.getAddress(t.address);
+  return `<span class="ca-btn${iconOnly ? " ca-icon" : ""}" role="button" tabindex="0" data-ca="${a}" data-sym="${esc(t.symbol)}" title="Copy contract address ${a}" aria-label="Copy ${esc(t.symbol)} contract address">${iconOnly ? "" : `<span class="addr">${short(a)}</span>`}<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="1"/><path d="M5 15V4a1 1 0 0 1 1-1h11"/></svg></span>`;
+}
+async function copyText(text){
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  try { const ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;opacity:0;top:0;left:0";
+    document.body.appendChild(ta); ta.select(); const ok = document.execCommand("copy"); ta.remove(); return ok; } catch { return false; }
+}
+// capture phase, so a click on the chip copies and doesn't also select the row / coin it sits in
+const onCa = async e => {
+  const b = e.target.closest?.(".ca-btn"); if (!b) return;
+  if (e.type === "keydown" && e.key !== "Enter" && e.key !== " ") return;
+  e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+  const ok = await copyText(b.dataset.ca);
+  toast(ok ? `Copied ${b.dataset.sym} contract address: ${b.dataset.ca}` : "Couldn't copy. Select and copy the address from the explorer instead.", ok ? "" : "err");
+  if (ok) { b.classList.add("copied"); setTimeout(() => b.classList.remove("copied"), 1200); }
+};
+document.addEventListener("click", onCa, true);
+document.addEventListener("keydown", onCa, true);
 function tokBtnHTML(t){ return `${icon(t)}<span>${esc(t.symbol)}</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6"/></svg>`; }
 function toast(msg, kind = ""){ const el = document.createElement("div"); el.className = "toast " + kind; el.textContent = msg; $("toasts").appendChild(el); setTimeout(() => el.remove(), 6000); }
 function setOnline(ok){ if (S.online === ok) return; S.online = ok; $("netDot").className = "dot " + (ok ? "on" : "bad"); $("netLabel").textContent = ok ? "PulseChain" : "Prices unavailable"; }
@@ -1016,13 +1053,13 @@ function renderPicker(){
   const other = { from: S.to, to: S.from, lpA: S.lpB, lpB: S.lpA }[S.pickSide];
   const match = t => !q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.address.toLowerCase() === q;
   // coins in the looked-up wallet come first, biggest value first, with their balance
-  const held = new Map((S.hold.coins || []).filter(c => !isHidden(c)).map(c => [(c.address === "native" ? "native" : c.address.toLowerCase()), c]));
+  const held = new Map((S.hold.coins || []).filter(c => !isHidden(c) && !(c.address !== "native" && c.usd != null && c.usd < CONFIG.prices.minShowUsd)).map(c => [(c.address === "native" ? "native" : c.address.toLowerCase()), c]));
   const hc = t => held.get(t.address === "native" ? "native" : t.address.toLowerCase());
   const list = S.tokens.filter(match).sort((x, y) => { const a = hc(x), b = hc(y); return (!!b - !!a) || ((b?.usd ?? -1) - (a?.usd ?? -1)); });
   const walletCount = list.filter(hc).length;
   $("tokList").innerHTML = list.map((t, i) => { const c = hc(t);
     return `${i === 0 && walletCount ? '<div class="pick-hd">In your wallet</div>' : ""}${i === walletCount && walletCount ? '<div class="pick-hd">Other coins</div>' : ""}<button class="tok-item ${t.address === other.address ? "sel" : ""}" data-addr="${esc(t.address)}">
-      ${icon(t, 34)}<span style="flex:1;min-width:0"><div class="sym" style="font-weight:600">${esc(t.symbol)}${t.custom ? '<span class="tag">IMPORTED</span>' : ""}</div><div style="font-size:12px;color:var(--dim)">${esc(t.name)}</div></span>${c ? `<span class="pick-bal"><b class="num">${fmt(c.bal, t.decimals, 4)}</b>${c.usd != null ? `<span>${usd(c.usd)}</span>` : ""}</span>` : ""}</button>`; }).join("")
+      ${icon(t, 34)}<span style="flex:1;min-width:0"><div class="sym" style="font-weight:600">${esc(t.symbol)}${t.custom ? '<span class="tag">IMPORTED</span>' : ""}</div><div style="font-size:12px;color:var(--dim)">${esc(t.name)}${t.address !== "native" ? ` <span class="addr ca-txt">${short(t.address)}</span>` : ""}</div></span>${c ? `<span class="pick-bal"><b class="num">${fmt(c.bal, t.decimals, 4)}</b>${c.usd != null ? `<span>${usd(c.usd)}</span>` : ""}</span>` : ""}${t.address !== "native" ? caChip(t, true) : '<span class="ca-sp"></span>'}</button>`; }).join("")
     || '<div class="empty">No match. Paste a token contract address to import it.</div>';
   $("importBox").innerHTML = "";
   if (ethers.isAddress(q) && !findTok(q)) lookupToken(q);
@@ -1086,6 +1123,7 @@ async function loadPair(){
 function renderPool(){
   const A = S.lpA, B = S.lpB, p = S.lpPair, r = CONFIG.routers[S.lpVer];
   $("lpABtn").innerHTML = tokBtnHTML(A); $("lpBBtn").innerHTML = tokBtnHTML(B);
+  $("lpCas").innerHTML = [A, B].filter(t => t.address !== "native").map(t => `<span class="pool-ca">${esc(t.symbol)} ${caChip(t)}</span>`).join("");
   document.querySelectorAll("#verSeg button").forEach(b => b.classList.toggle("on", +b.dataset.v === S.lpVer));
   const same = eq(pathAddr(A), pathAddr(B));
   let info = "";
@@ -1130,6 +1168,7 @@ function render(){
   $("appName").textContent = CONFIG.appName; document.title = CONFIG.appName;
   $("fromBtn").innerHTML = tokBtnHTML(S.from);
   $("toBtn").innerHTML = tokBtnHTML(S.to);
+  $("fromCa").innerHTML = caChip(S.from); $("toCa").innerHTML = caChip(S.to);
   $("openPulsex").href = swapLink(S.from, S.to);
   renderTarget();
   renderRoute();
@@ -1612,6 +1651,7 @@ function syncWalletTokens(){
     if (c.address === "native" || findTok(c.address)) continue;
     if (c.usd == null && c.tok.found) continue;
     if (isHidden(c)) continue;
+    if (c.usd != null && c.usd < CONFIG.prices.minShowUsd) continue;
     S.tokens.push({ symbol: c.tok.symbol, name: c.tok.name || "", address: ethers.getAddress(c.address), decimals: c.tok.decimals ?? 18, walletCoin: true });
   }
 }
@@ -1629,20 +1669,24 @@ function renderHoldings(){
   // PLS and listed coins always show (with "no price" if needed); only unknown, unpriced coins go behind the spam toggle
   const isJunk = c => c.usd == null && c.address !== "native" && !!c.tok.found;
   const hid = h.coins.filter(isHidden), vis = h.coins.filter(c => !isHidden(c));
-  const real = vis.filter(c => !isJunk(c)), junk = vis.filter(isJunk);
-  const list = h.showJunk ? h.coins : real;
-  const ps = h.positions || [];
+  const isTiny = c => c.address !== "native" && c.usd != null && c.usd < CONFIG.prices.minShowUsd;
+  const real = vis.filter(c => !isJunk(c) && !isTiny(c)), junk = vis.filter(isJunk), tiny = vis.filter(isTiny);
+  const list = [...real, ...(h.showTiny ? tiny : []), ...(h.showJunk ? junk : [])];
+  const psAll = h.positions || [], ps = psAll.filter(p => !(p.usd != null && p.usd < CONFIG.prices.minShowUsd));
+  const psTiny = psAll.filter(p => !ps.includes(p));
   const tot = real.reduce((s, c) => s + (c.usd || 0), 0) + ps.reduce((s, p) => s + (p.usd || 0), 0);
   const parts = [real.length && `${real.length} coin${real.length === 1 ? "" : "s"}`, ps.length && `${ps.length} pool${ps.length === 1 ? "" : "s"}`].filter(Boolean);
   $("holdTotal").innerHTML = parts.length ? `<span class="num">${usd(tot)}</span> across ${parts.join(" and ")}` : "";
   const row = (c, hidden) => `<div class="hold-row${hidden ? " is-hidden" : ""}" data-i="${h.coins.indexOf(c)}" role="button" tabindex="0">
       ${icon(c.tok, 30)}
-      <span class="grow"><span class="sym">${esc(c.tok.symbol)}${c.tok.found ? '<span class="tag">FOUND</span>' : ""}</span><span class="nm">${esc(c.tok.name)}</span></span>
+      <span class="grow"><span class="sym">${esc(c.tok.symbol)}${c.tok.found ? '<span class="tag">FOUND</span>' : ""}</span><span class="nm">${esc(c.tok.name)}${c.address === "native" ? "" : ` <span class="addr ca-txt">${short(c.tok.address)}</span>`}</span></span>
       <span class="hv"><b class="num">${fmt(c.bal, c.tok.decimals, 4)}</b><span>${c.usd != null ? `${usd(c.usd)} <span class="each">· ${each(c)} each</span>${c.priceSrc && c.priceSrc !== PRICE_SOURCES[CONFIG.prices.source].label ? ` <span class="src-tag" title="Not listed on ${esc(PRICE_SOURCES[CONFIG.prices.source].label)}, so this price comes from the backup (${esc(c.priceSrc)}'s own index)">${esc(c.priceSrc)} price</span>` : ""}` : "no price"}</span></span>
+      ${c.address === "native" ? '<span class="ca-sp"></span>' : caChip(c.tok, true)}
       ${c.address === "native" ? '<span class="hide-sp"></span>' : `<button type="button" class="hide-btn" data-hide="${esc(c.address)}" data-on="${hidden ? 0 : 1}" title="${hidden ? "Show this coin again" : "Hide this coin from holdings"}" aria-label="${hidden ? "Unhide" : "Hide"} ${esc(c.tok.symbol)}">${hidden ? "Unhide" : "×"}</button>`}
     </div>`;
   box.innerHTML = (list.length ? list.map(c => row(c, false)).join("") : '<div class="empty">No priced coins found in this wallet.</div>')
-    + (ps.length ? `<div class="lp-hd">Liquidity</div>` + ps.map((p, i) => posRow(p, i, "hold")).join("") : "")
+    + (ps.length ? `<div class="lp-hd">Liquidity</div>` + ps.map(p => posRow(p, psAll.indexOf(p), "hold")).join("") : "")
+    + (tiny.length || psTiny.length ? `<label class="junk"><input type="checkbox" id="tinyTgl" ${h.showTiny ? "checked" : ""}> Show ${[tiny.length && `${tiny.length} coin${tiny.length === 1 ? "" : "s"}`, psTiny.length && `${psTiny.length} pool${psTiny.length === 1 ? "" : "s"}`].filter(Boolean).join(" and ")} worth under $${CONFIG.prices.minShowUsd}</label>${h.showTiny && psTiny.length ? psTiny.map(p => posRow(p, psAll.indexOf(p), "hold")).join("") : ""}` : "")
     + (hid.length ? `<div class="empty"><button type="button" class="linkish" id="hidTgl" style="margin:0">${h.showHidden ? "Hide" : "Show"} ${hid.length} hidden coin${hid.length === 1 ? "" : "s"}</button></div>${h.showHidden ? hid.map(c => row(c, true)).join("") : ""}` : "")
     + (junk.length ? `<label class="junk"><input type="checkbox" id="junkTgl" ${h.showJunk ? "checked" : ""}> Show ${junk.length} coin${junk.length === 1 ? "" : "s"} with no price (often airdropped spam)</label>` : "")
     + (h.scanning ? `<div class="empty"><span class="spin"></span> Checking ${h.scanning.toLocaleString("en-US")} more coins and pools…</div>` : "")
@@ -1650,6 +1694,7 @@ function renderHoldings(){
     + (h.partial ? '<div class="warnbox w">The price server limited the search, so some coins may be missing.</div>' : "")
     + `<div class="empty">${h.source === "pBank" ? "Balances from pBank. " : ""}${priceSourceUsed ? `Prices from ${priceSourceUsed}.` : ""}</div>`;
   if ($("junkTgl")) $("junkTgl").onchange = e => { h.showJunk = e.target.checked; renderHoldings(); };
+  if ($("tinyTgl")) $("tinyTgl").onchange = e => { h.showTiny = e.target.checked; renderHoldings(); };
   if ($("deepBtn")) $("deepBtn").onclick = deepScan;
   if ($("hidTgl")) $("hidTgl").onclick = () => { h.showHidden = !h.showHidden; renderHoldings(); };
   renderPositions();
@@ -1731,9 +1776,9 @@ function renderPositions(){
   const box = $("lpPositions"), h = S.hold;
   if (!h.addr) { box.innerHTML = '<div class="empty">Look up a wallet under Holdings to see its liquidity positions here.</div>'; return; }
   if (h.loading) { box.innerHTML = '<div class="empty"><span class="spin"></span> Finding liquidity positions…</div>'; return; }
-  const ps = h.positions || [];
+  const psAll = h.positions || [], ps = psAll.filter(p => h.showTiny || !(p.usd != null && p.usd < CONFIG.prices.minShowUsd));
   box.innerHTML = `<div class="lp-hd">Positions in <span class="addr">${short(h.addr)}</span></div>` +
-    (ps.length ? ps.map((p, i) => posRow(p, i, "pools")).join("") : '<div class="empty">No PulseX liquidity positions in this wallet. Pool tokens that are staked in a farm are held by the farm, so they won\'t show here.</div>');
+    (ps.length ? ps.map(p => posRow(p, psAll.indexOf(p), "pools")).join("") : '<div class="empty">No PulseX liquidity positions in this wallet. Pool tokens that are staked in a farm are held by the farm, so they won\'t show here.</div>');
 }
 function openPosition(i){
   const p = S.hold.positions[i];
