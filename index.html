@@ -1431,12 +1431,12 @@ const PRICE_SOURCES = {
         const want = new Set(list);
         for (const p of Array.isArray(j) ? j : j?.pairs || []) {
           if (p?.chainId !== "pulsechain") continue;
-          const liq = +p?.liquidity?.usd || 0, pu = +p?.priceUsd, pn = +p?.priceNative;
+          const liq = +p?.liquidity?.usd || 0, pu = +p?.priceUsd;
           if (!(pu > 0) || liq < CONFIG.prices.minLiquidityUsd) continue;
-          const base = String(p?.baseToken?.address || "").toLowerCase(), quote = String(p?.quoteToken?.address || "").toLowerCase();
-          // priceUsd is the base coin's price; the quote coin's price follows from the pool ratio
-          const cands = [[base, pu]]; if (pn > 0) cands.push([quote, pu / pn]);
-          for (const [a, usd] of cands) if (want.has(a) && isFinite(usd) && (!out.has(a) || out.get(a).liq < liq)) out.set(a, { usd, liq });
+          const base = String(p?.baseToken?.address || "").toLowerCase();
+          // only DexScreener's direct price (the pool's base coin). Prices worked out for the other side from the
+          // pool ratio are skipped: against a scam or near-worthless coin they can come out absurdly high.
+          if (want.has(base) && isFinite(pu) && (!out.has(base) || out.get(base).liq < liq)) out.set(base, { usd: pu, liq });
         }
       }));
       return out;
@@ -1496,6 +1496,7 @@ async function getPrices(addrs){
   for (const a of need) { const p = got.get(a); priceCache.set(a, { usd: p ? p.usd : null, src: p?.src, at: now }); if (p) res.set(a, { usd: p.usd, src: p.src }); }
   return res;
 }
+const isMain = a => eq(a, CONFIG.WPLS) || CONFIG.tokens.some(t => t.address !== "native" && eq(t.address, a));
 // put dollar values on coins and pool positions
 async function applyPrices(coins, positions = []){
   const W = CONFIG.WPLS.toLowerCase();
@@ -1506,8 +1507,12 @@ async function applyPrices(coins, positions = []){
     const u0 = px.get(p.a0.toLowerCase())?.usd, u1 = px.get(p.a1.toLowerCase())?.usd;
     const v0 = u0 != null ? Number(ethers.formatUnits(p.amt0, lpTok(p.a0).decimals)) * u0 : null;
     const v1 = u1 != null ? Number(ethers.formatUnits(p.amt1, lpTok(p.a1).decimals)) * u1 : null;
-    // a pool holds equal value on both sides, so one priced side is enough
-    p.usd = v0 != null && v1 != null ? v0 + v1 : v0 != null ? v0 * 2 : v1 != null ? v1 * 2 : null;
+    // A pool always holds equal value on both sides, so value it as twice one side:
+    // a main coin's side when there is one (its price is reliable), otherwise the lower side,
+    // so one wildly wrong price can't inflate the position.
+    const main0 = isMain(p.a0), main1 = isMain(p.a1);
+    p.usd = main0 && v0 != null ? v0 * 2 : main1 && v1 != null ? v1 * 2
+          : v0 != null && v1 != null ? Math.min(v0, v1) * 2 : v0 != null ? v0 * 2 : v1 != null ? v1 * 2 : null;
   }
   positions.sort((x, y) => (y.usd ?? -1) - (x.usd ?? -1));
 }
