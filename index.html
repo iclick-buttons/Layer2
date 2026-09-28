@@ -139,8 +139,8 @@
   .linkish{color:var(--ion);font-size:12px;margin-left:12px}
   .hold-total{font-family:var(--display);font-size:15px;color:var(--mute);margin-top:6px;letter-spacing:.02em;min-height:1em}
   .hold-total .num{font-size:26px;color:var(--ink);margin-right:6px}
-  #holdList{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));column-gap:28px;align-content:start;margin-top:6px;flex:1;min-height:0;max-height:560px;overflow-y:auto;padding-right:4px}
-  #holdList > .empty,#holdList > .warnbox,#holdList > .junk{grid-column:1 / -1}
+  #holdList{display:flex;flex-direction:column;margin-top:6px;flex:1;min-height:0;max-height:560px;overflow-y:auto;padding-right:4px}
+
   .hold-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:9px 6px;border-bottom:1px solid var(--line);border-left:2px solid transparent}
   .hold-row:hover{background:rgba(70,230,255,.06);border-left-color:var(--ion)}
   .hold-row .grow{flex:1;min-width:0;display:flex;flex-direction:column}
@@ -149,6 +149,14 @@
   .hv{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--mute)}
   .hv b{font-size:15px;color:var(--ink);font-weight:500}
   .junk{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--mute);margin-top:10px}
+  .pair{display:flex;flex:none}
+  .pair .tok-ico + .tok-ico{margin-left:-4px}
+  .pill{font:600 10px/1 var(--display);letter-spacing:.05em;padding:2px 5px;margin-left:4px;color:#c4b5fd;border:1px solid rgba(196,181,253,.35);vertical-align:2px}
+  .lp-hd{font-family:var(--display);font-size:14px;letter-spacing:.04em;color:var(--mute);margin:16px 2px 4px}
+  .lp-row{cursor:pointer}
+  .lp-acts{display:flex;gap:10px;margin-top:2px}
+  .lp-acts a{font-size:12px}
+  #lpPositions{margin-top:6px;border-top:1px solid var(--line)}
   .pool-pick{display:flex;align-items:center;gap:12px;margin-top:10px}
   .plus{color:var(--faint);font-family:var(--display);font-size:20px}
 
@@ -323,7 +331,8 @@
       </div>
       <div id="lpInfo"></div>
       <a class="btn-grad main-btn off" id="lpBtn" target="_blank" rel="noopener noreferrer">Add liquidity on PulseX ↗</a>
-      <div class="handoff-note">To see or remove your own positions, open the Liquidity page on PulseX. This page never sees your wallet, so it can't list them.</div>
+      <div class="handoff-note">Add and Remove open PulseX with the pool selected; you connect your wallet there.</div>
+      <div id="lpPositions"></div>
     </div>
   </section>
 
@@ -513,7 +522,7 @@ const ERC20_ABI = ["function balanceOf(address) view returns (uint256)", "functi
 const ROUTER_ABI = ["function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)"];
 const MC_ABI = ["function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[] returnData)"];
 const FACTORY_ABI = ["function getPair(address,address) view returns (address)"];
-const PAIR_ABI = ["function token0() view returns (address)", "function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)", "function totalSupply() view returns (uint256)"];
+const PAIR_ABI = ["function factory() view returns (address)", "function token1() view returns (address)", "function token0() view returns (address)", "function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)", "function totalSupply() view returns (uint256)"];
 const routerIface = new ethers.Interface(ROUTER_ABI), ercIface = new ethers.Interface(ERC20_ABI);
 const factoryIface = new ethers.Interface(FACTORY_ABI), pairIface = new ethers.Interface(PAIR_ABI);
 
@@ -1216,7 +1225,7 @@ async function loadHoldings(force){
   const h = S.hold, addr = h.addr; if (!addr) return;
   const seq = ++h.seq;
   const hit = holdCache.get(addr.toLowerCase());
-  if (!force && hit && Date.now() - hit.at < 5 * 60000) { Object.assign(h, { coins: hit.coins, partial: hit.partial, loading: false, err: null }); renderHoldings(); render(); return; }
+  if (!force && hit && Date.now() - hit.at < 5 * 60000) { Object.assign(h, { coins: hit.coins, positions: hit.positions, partial: hit.partial, loading: false, err: null }); renderHoldings(); render(); return; }
   Object.assign(h, { loading: true, err: null }); renderHoldings();
   try {
     const budget = { left: CONFIG.holdings.maxRequests, partial: false };
@@ -1226,7 +1235,8 @@ async function loadHoldings(force){
     const calls = [{ target: CONFIG.multicall, iface: MC_ETH, fn: "getEthBalance", args: [addr] },
       ...all.map(a => ({ target: a, iface: ercIface, fn: "balanceOf", args: [addr] }))];
     const res = await multi(calls);
-    const held = all.map((a, i) => ({ a, bal: res[i + 1]?.[0] })).filter(x => x.bal > 0n);
+    const heldAll = all.map((a, i) => ({ a, bal: res[i + 1]?.[0] })).filter(x => x.bal > 0n);
+    const { positions, rest: held } = await splitPositions(heldAll).catch(() => ({ positions: [], rest: heldAll }));
     const unknown = held.filter(x => !findTok(x.a)).map(x => x.a);
     const meta = await multi(unknown.flatMap(a => ["symbol", "name", "decimals"].map(fn => ({ target: a, iface: ercIface, fn }))));
     const coins = [];
@@ -1239,10 +1249,12 @@ async function loadHoldings(force){
       coins.push({ address: tok.address, tok, bal: x.bal });
     });
     await valuesInPls(coins);
-    coins.sort((x, y) => (y.pls ?? -1n) > (x.pls ?? -1n) ? 1 : (y.pls ?? -1n) < (x.pls ?? -1n) ? -1 : 0);
+    // PLS always first, then highest dollar value down; coins with no price go last
+    const worth = c => c.usd ?? (c.pls != null ? Number(ethers.formatUnits(c.pls, 18)) * 1e-12 : -1);
+    coins.sort((x, y) => (y.address === "native") - (x.address === "native") || worth(y) - worth(x));
     if (seq !== h.seq) return;
-    Object.assign(h, { coins, partial: budget.partial, loading: false });
-    holdCache.set(addr.toLowerCase(), { at: Date.now(), coins, partial: budget.partial });
+    Object.assign(h, { coins, positions, partial: budget.partial, loading: false });
+    holdCache.set(addr.toLowerCase(), { at: Date.now(), coins, positions, partial: budget.partial });
   } catch (e) { console.warn("Holdings look-up failed:", e); if (seq !== h.seq) return; Object.assign(h, { loading: false, err: "Couldn't read this wallet. Check your connection and try again." }); }
   renderHoldings(); render();
 }
@@ -1253,22 +1265,27 @@ function renderHoldings(){
   $("holdAddr").value = $("holdAddr").value || h.addr || "";
   $("pbankLink").style.display = CONFIG.pbank?.walletLink && h.addr ? "" : "none";
   if (CONFIG.pbank?.walletLink && h.addr) $("pbankLink").href = CONFIG.pbank.walletLink.replace("{address}", h.addr);
+  renderPositions();
   if (!h.addr) { box.innerHTML = '<div class="empty">Paste a wallet address to see its coins. Only the public address is needed. Never paste a seed phrase or private key anywhere.</div>'; $("holdTotal").textContent = ""; return; }
   if (h.loading) { box.innerHTML = '<div class="empty"><span class="spin"></span> Searching the blockchain for coins this wallet holds…</div>'; return; }
   if (h.err) { box.innerHTML = `<div class="warnbox b">${esc(h.err)}</div>`; return; }
   if (!h.coins) { box.innerHTML = ""; return; }
   const real = h.coins.filter(c => c.pls != null), junk = h.coins.filter(c => c.pls == null);
   const list = h.showJunk ? h.coins : real;
-  const tot = real.reduce((s, c) => s + (c.usd || 0), 0);
-  $("holdTotal").innerHTML = real.length ? `<span class="num">${usd(tot)}</span> across ${real.length} coin${real.length === 1 ? "" : "s"}` : "";
+  const ps = h.positions || [];
+  const tot = real.reduce((s, c) => s + (c.usd || 0), 0) + ps.reduce((s, p) => s + (p.usd || 0), 0);
+  const parts = [real.length && `${real.length} coin${real.length === 1 ? "" : "s"}`, ps.length && `${ps.length} pool${ps.length === 1 ? "" : "s"}`].filter(Boolean);
+  $("holdTotal").innerHTML = parts.length ? `<span class="num">${usd(tot)}</span> across ${parts.join(" and ")}` : "";
   box.innerHTML = (list.length ? list.map((c, i) => `<button class="hold-row" data-i="${h.coins.indexOf(c)}">
       ${icon(c.tok, 30)}
       <span class="grow"><span class="sym">${esc(c.tok.symbol)}${c.tok.found ? '<span class="tag">FOUND</span>' : ""}</span><span class="nm">${esc(c.tok.name)}</span></span>
       <span class="hv"><b class="num">${fmt(c.bal, c.tok.decimals, 4)}</b><span>${c.pls != null ? usd(c.usd) || fmt(c.pls, 18, 0) + " PLS" : "no PulseX pool"}</span></span>
     </button>`).join("") : '<div class="empty">No coins with a PulseX pool found in this wallet.</div>')
+    + (ps.length ? `<div class="lp-hd">Liquidity</div>` + ps.map((p, i) => posRow(p, i, "hold")).join("") : "")
     + (junk.length ? `<label class="junk"><input type="checkbox" id="junkTgl" ${h.showJunk ? "checked" : ""}> Show ${junk.length} coin${junk.length === 1 ? "" : "s"} with no PulseX pool (often airdropped spam)</label>` : "")
     + (h.partial ? '<div class="warnbox w">The price server limited the search, so some coins may be missing.</div>' : "");
   if ($("junkTgl")) $("junkTgl").onchange = e => { h.showJunk = e.target.checked; renderHoldings(); };
+  renderPositions();
 }
 $("holdForm").addEventListener("submit", e => {
   e.preventDefault();
@@ -1288,7 +1305,7 @@ $("holdRemember").addEventListener("change", e => { try { if (e.target.checked &
 $("holdClear").onclick = () => { S.hold = { ...S.hold, addr: null, coins: null, err: null }; $("holdAddr").value = ""; try { localStorage.removeItem(LS.wallet); } catch {} renderHoldings(); render(); };
 $("holdRefresh").onclick = () => loadHoldings(true);
 $("holdList").addEventListener("click", e => {
-  const b = e.target.closest(".hold-row"); if (!b) return;
+  const b = e.target.closest(".hold-row"); if (!b || b.classList.contains("lp-row")) return;
   const c = S.hold.coins[+b.dataset.i];
   if (!findTok(c.tok.address) && c.address !== "native") S.tokens.push({ ...c.tok, custom: true });
   const t = c.address === "native" ? findTok("native") : findTok(c.tok.address);
@@ -1298,6 +1315,77 @@ $("holdList").addEventListener("click", e => {
   setAmount(c.bal);
   const con = document.querySelector(".console"), r = con.getBoundingClientRect();
   if (r.top < 0 || r.top > innerHeight * .5) con.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+});
+
+/* ---------- liquidity positions (look-up only) ----------
+   Adding liquidity on PulseX sends the wallet pool tokens, so the holdings scan already finds them.
+   Here they're recognised as PulseX pools and turned into "your share of each coin". */
+const LPMETA = {};   // coin address -> { symbol, name, decimals } for coins inside pools
+function lpTok(addr){
+  const a = addr.toLowerCase();
+  return findTok(a) || { symbol: LPMETA[a]?.symbol || META[a] || short(addr), name: LPMETA[a]?.name || "", address: ethers.getAddress(addr), decimals: LPMETA[a]?.decimals ?? 18 };
+}
+async function splitPositions(held){
+  if (!held.length) return { positions: [], rest: held };
+  const fac = await multi(held.map(x => ({ target: x.a, iface: pairIface, fn: "factory" })));
+  const lp = [], rest = [];
+  held.forEach((x, i) => { const ri = fac[i] ? CONFIG.routers.findIndex(r => eq(r.factory, fac[i][0])) : -1; (ri >= 0 ? lp : rest).push(ri >= 0 ? { ...x, ri } : x); });
+  if (!lp.length) return { positions: [], rest };
+  const F = ["token0", "token1", "getReserves", "totalSupply"];
+  const info = await multi(lp.flatMap(x => F.map(fn => ({ target: x.a, iface: pairIface, fn }))));
+  const positions = [], unknown = new Set();
+  lp.forEach((x, i) => {
+    const [t0, t1, res, ts] = F.map((_, k) => info[i * 4 + k]);
+    if (!t0 || !t1 || !res || !ts || ts[0] === 0n) return;
+    const p = { pair: ethers.getAddress(x.a), ri: x.ri, router: CONFIG.routers[x.ri], a0: t0[0], a1: t1[0], lp: x.bal, ts: ts[0], r0: res[0], r1: res[1] };
+    p.amt0 = p.lp * p.r0 / p.ts; p.amt1 = p.lp * p.r1 / p.ts; p.share = Number(p.lp * 1000000n / p.ts) / 10000;
+    positions.push(p);
+    [p.a0, p.a1].forEach(a => { if (!findTok(a) && !LPMETA[a.toLowerCase()]) unknown.add(a.toLowerCase()); });
+  });
+  const u = [...unknown];
+  const m = await multi(u.flatMap(a => ["symbol", "name", "decimals"].map(fn => ({ target: a, iface: ercIface, fn }))));
+  u.forEach((a, i) => { LPMETA[a] = { symbol: String(m[i * 3]?.[0] ?? short(a)).slice(0, 16), name: String(m[i * 3 + 1]?.[0] ?? "").slice(0, 48), decimals: m[i * 3 + 2] ? Number(m[i * 3 + 2][0]) : 18 }; });
+  // value both halves; if one side has no price, the pool's own ratio means the other half is worth the same
+  const sides = positions.flatMap(p => [{ address: p.a0, bal: p.amt0, p }, { address: p.a1, bal: p.amt1, p }]).filter(s => s.bal > 0n);
+  await valuesInPls(sides);
+  positions.forEach(p => {
+    const [s0, s1] = [sides.find(s => s.p === p && eq(s.address, p.a0)), sides.find(s => s.p === p && eq(s.address, p.a1))];
+    const u0 = s0?.usd, u1 = s1?.usd;
+    p.usd = u0 != null && u1 != null ? u0 + u1 : u0 != null ? u0 * 2 : u1 != null ? u1 * 2 : null;
+  });
+  positions.sort((x, y) => (y.usd ?? -1) - (x.usd ?? -1));
+  return { positions, rest };
+}
+function removeLink(a, b){ return pxUrl(`/remove/${a}/${b}`); }
+function posRow(p, i, where){
+  const t0 = lpTok(p.a0), t1 = lpTok(p.a1);
+  return `<div class="hold-row lp-row" data-pos="${i}" data-where="${where}" role="button" tabindex="0">
+    <span class="pair">${icon(t0, 26)}${icon(t1, 26)}</span>
+    <span class="grow"><span class="sym">${esc(t0.symbol)} / ${esc(t1.symbol)} <span class="pill">${esc(p.router.label.replace("PulseX ", ""))}</span></span>
+      <span class="nm">${fmt(p.amt0, t0.decimals, 4)} ${esc(t0.symbol)} + ${fmt(p.amt1, t1.decimals, 4)} ${esc(t1.symbol)} · ${p.share < 0.01 ? "<0.01" : p.share.toFixed(2)}% of pool</span></span>
+    <span class="hv"><b class="num">${p.usd != null ? usd(p.usd) : "—"}</b>${where === "pools" ? `<span class="lp-acts"><a href="${addLink(tokOrPls(p.a0), tokOrPls(p.a1))}" target="_blank" rel="noopener noreferrer">Add ↗</a><a href="${removeLink(p.a0, p.a1)}" target="_blank" rel="noopener noreferrer">Remove ↗</a></span>` : ""}</span>
+  </div>`;
+}
+const tokOrPls = a => eq(a, CONFIG.WPLS) ? findTok("native") : lpTok(a);
+function renderPositions(){
+  const box = $("lpPositions"), h = S.hold;
+  if (!h.addr) { box.innerHTML = '<div class="empty">Look up a wallet under Holdings to see its liquidity positions here.</div>'; return; }
+  if (h.loading) { box.innerHTML = '<div class="empty"><span class="spin"></span> Finding liquidity positions…</div>'; return; }
+  const ps = h.positions || [];
+  box.innerHTML = `<div class="lp-hd">Positions in <span class="addr">${short(h.addr)}</span></div>` +
+    (ps.length ? ps.map((p, i) => posRow(p, i, "pools")).join("") : '<div class="empty">No PulseX liquidity positions in this wallet. Pool tokens that are staked in a farm are held by the farm, so they won\'t show here.</div>');
+}
+function openPosition(i){
+  const p = S.hold.positions[i];
+  S.lpA = tokOrPls(p.a0); S.lpB = tokOrPls(p.a1); S.lpVer = p.ri;
+  [S.lpA, S.lpB].forEach(t => { if (t.address !== "native" && !findTok(t.address)) S.tokens.push({ ...t, custom: true }); });
+  document.querySelector('#tabs [data-tab="pools"]').click();
+  const con = document.querySelector(".console"), r = con.getBoundingClientRect();
+  if (r.top < 0 || r.top > innerHeight * .5) con.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+}
+document.addEventListener("click", e => {
+  const row = e.target.closest(".lp-row"); if (!row || e.target.closest("a")) return;
+  openPosition(+row.dataset.pos);
 });
 
 function renderTarget(){
