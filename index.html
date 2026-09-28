@@ -244,6 +244,9 @@
   .tok-item{display:flex;align-items:center;gap:12px;padding:9px 8px;width:100%;text-align:left;border-left:2px solid transparent}
   .tok-item:hover{background:rgba(70,230,255,.06);border-left-color:var(--ion)}
   .tok-item.sel{opacity:.35;pointer-events:none}
+  .pick-hd{font:600 12px/1 var(--display);letter-spacing:.05em;color:var(--mute);padding:12px 8px 6px}
+  .pick-bal{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--mute)}
+  .pick-bal b{font-size:14px;color:var(--ink);font-weight:500}
   .tag{font-size:10px;padding:1px 6px;margin-left:6px;color:var(--warn);border:1px solid rgba(255,200,87,.4);font-family:var(--display);letter-spacing:.04em}
 
   .toasts{position:fixed;right:18px;bottom:18px;z-index:60;display:flex;flex-direction:column;gap:10px;max-width:360px}
@@ -464,10 +467,10 @@ const CONFIG = {
   // and add https://dexdenom.com to connect-src in the Content-Security-Policy at the top of the file.
   prices: {
     source: "dexscreener",     // "dexscreener" or "dexdenom"
-    fallback: "pulsex",        // used if the source can't be reached: PulseX's own index prices
+    fallback: "pulsex",        // PulseX's own index prices, for any coin the source doesn't price (or if it's unreachable)
     dexscreener: { url: "https://api.dexscreener.com/tokens/v1/pulsechain/{addresses}", batch: 30 },
     dexdenom:    { url: "", batch: 100 },   // e.g. "https://dexdenom.com/api/prices?addresses={addresses}"
-    minLiquidityUsd: 500,      // pools with less liquidity than this can't set a coin's price
+    minLiquidityUsd: 100,      // pools with less liquidity than this can't set a coin's price (same floor as the pool index)
     cacheSeconds: 30,
     timeoutMs: 8000,
   },
@@ -1000,9 +1003,15 @@ $("tokSearch").addEventListener("input", renderPicker);
 function renderPicker(){
   const q = $("tokSearch").value.trim().toLowerCase();
   const other = { from: S.to, to: S.from, lpA: S.lpB, lpB: S.lpA }[S.pickSide];
-  const list = S.tokens.filter(t => !q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.address.toLowerCase() === q);
-  $("tokList").innerHTML = list.map(t => `<button class="tok-item ${t.address === other.address ? "sel" : ""}" data-addr="${esc(t.address)}">
-      ${icon(t, 34)}<span style="flex:1;min-width:0"><div class="sym" style="font-weight:600">${esc(t.symbol)}${t.custom ? '<span class="tag">IMPORTED</span>' : ""}</div><div style="font-size:12px;color:var(--dim)">${esc(t.name)}</div></span></button>`).join("")
+  const match = t => !q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.address.toLowerCase() === q;
+  // coins in the looked-up wallet come first, biggest value first, with their balance
+  const held = new Map((S.hold.coins || []).map(c => [(c.address === "native" ? "native" : c.address.toLowerCase()), c]));
+  const hc = t => held.get(t.address === "native" ? "native" : t.address.toLowerCase());
+  const list = S.tokens.filter(match).sort((x, y) => { const a = hc(x), b = hc(y); return (!!b - !!a) || ((b?.usd ?? -1) - (a?.usd ?? -1)); });
+  const walletCount = list.filter(hc).length;
+  $("tokList").innerHTML = list.map((t, i) => { const c = hc(t);
+    return `${i === 0 && walletCount ? '<div class="pick-hd">In your wallet</div>' : ""}${i === walletCount && walletCount ? '<div class="pick-hd">Other coins</div>' : ""}<button class="tok-item ${t.address === other.address ? "sel" : ""}" data-addr="${esc(t.address)}">
+      ${icon(t, 34)}<span style="flex:1;min-width:0"><div class="sym" style="font-weight:600">${esc(t.symbol)}${t.custom ? '<span class="tag">IMPORTED</span>' : ""}</div><div style="font-size:12px;color:var(--dim)">${esc(t.name)}</div></span>${c ? `<span class="pick-bal"><b class="num">${fmt(c.bal, t.decimals, 4)}</b>${c.usd != null ? `<span>${usd(c.usd)}</span>` : ""}</span>` : ""}</button>`; }).join("")
     || '<div class="empty">No match. Paste a token contract address to import it.</div>';
   $("importBox").innerHTML = "";
   if (ethers.isAddress(q) && !findTok(q)) lookupToken(q);
@@ -1419,13 +1428,16 @@ async function getPrices(addrs){
   const now = Date.now(), maxAge = CONFIG.prices.cacheSeconds * 1000, res = new Map();
   const need = [...new Set(addrs.map(a => a.toLowerCase()))].filter(a => { const c = priceCache.get(a); if (c && now - c.at < maxAge) { if (c.usd != null) res.set(a, c.usd); return false; } return true; });
   if (!need.length) return res;
+  // main source first; then the fallback fills in whatever it didn't price
   const order = [CONFIG.prices.source, ...(CONFIG.prices.fallback && CONFIG.prices.fallback !== CONFIG.prices.source ? [CONFIG.prices.fallback] : [])];
-  let got = null;
+  const got = new Map(), used = [];
   for (const name of order) {
-    try { got = await PRICE_SOURCES[name].fetch(need); priceSourceUsed = PRICE_SOURCES[name].label; break; }
+    const left = need.filter(a => !got.has(a)); if (!left.length) break;
+    try { const r = await PRICE_SOURCES[name].fetch(left); if (r.size) used.push(PRICE_SOURCES[name].label); for (const [a, p] of r) if (!got.has(a)) got.set(a, p); }
     catch (e) { console.warn(`Prices from ${name} unavailable:`, e?.message || e); }
   }
-  for (const a of need) { const p = got?.get(a); priceCache.set(a, { usd: p ? p.usd : null, at: now }); if (p) res.set(a, p.usd); }
+  if (used.length) priceSourceUsed = used.join(" and ");
+  for (const a of need) { const p = got.get(a); priceCache.set(a, { usd: p ? p.usd : null, at: now }); if (p) res.set(a, p.usd); }
   return res;
 }
 // put dollar values on coins and pool positions
@@ -1580,7 +1592,19 @@ const holdBal = t => { const c = S.hold.coins?.find(c => eq(c.address, t.address
 function each(c){ const n = Number(ethers.formatUnits(c.bal, c.tok.decimals ?? 18)); const p = n > 0 ? c.usd / n : 0;
   return !p ? "$0" : p >= 1 ? "$" + p.toLocaleString("en-US", { maximumFractionDigits: 2 }) : p >= 0.01 ? "$" + p.toFixed(4) : "$" + p.toPrecision(3); }
 function usd(n){ return n == null ? "" : n >= 1 ? "$" + n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 0 : 2 }) : n > 0 ? "<$1" : "$0"; }
+// every coin found in the looked-up wallet becomes selectable in the Swap and Pools pickers
+// (spam-looking coins with no price stay out; nothing is saved to the device)
+function syncWalletTokens(){
+  const keep = new Set([S.from, S.to, S.lpA, S.lpB].map(t => t.address.toLowerCase()));
+  S.tokens = S.tokens.filter(t => !t.walletCoin || keep.has(t.address.toLowerCase()));
+  for (const c of S.hold.coins || []) {
+    if (c.address === "native" || findTok(c.address)) continue;
+    if (c.usd == null && c.tok.found) continue;
+    S.tokens.push({ symbol: c.tok.symbol, name: c.tok.name || "", address: ethers.getAddress(c.address), decimals: c.tok.decimals ?? 18, walletCoin: true });
+  }
+}
 function renderHoldings(){
+  syncWalletTokens();
   const h = S.hold, box = $("holdList");
   $("holdAddr").value = $("holdAddr").value || h.addr || "";
   $("pbankLink").style.display = CONFIG.pbank?.walletLink && h.addr ? "" : "none";
