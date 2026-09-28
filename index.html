@@ -465,7 +465,7 @@ const CONFIG = {
     maxRequests: 60,       // cap on history requests per wallet look-up
     searchUnpriced: 12,
     livePriceMax: 80,        // coins re-priced live after the first (index) numbers show
-    livePricePls: 1000,      // backup price check size (PLS worth), for coins where 1 coin is too small to quote    // coins with no main-token pool whose own pools get searched for a price
+    livePriceUsd: 50,        // trade size (in dollars) used to pick each coin's route; the price is then a 1-coin quote on it    // coins with no main-token pool whose own pools get searched for a price
   },
   // pBank (with the owner's permission). Wallet holdings come from here first; if it can't be reached,
   // the page falls back to checking balances itself. If you change the site, also change connect-src at the top.
@@ -1522,9 +1522,10 @@ async function holdingsFromPbank(addr, seq, idxP){
   return true;
 }
 
-/* live prices for holdings: the pool index gives instant first numbers, then every coin is re-priced by
-   quoting what exactly 1 coin would really sell for right now, across both PulseX versions and the
-   best routes, the same way swaps are priced. */
+/* live prices for holdings: the pool index gives instant first numbers, then every coin is re-priced live.
+   Step 1 picks each coin's route with a meaningful trade (about $50 worth), so tiny or abandoned pools
+   with odd prices can't win. Step 2 reads the price from a 1-coin quote on that route, so slippage
+   doesn't drag it down. The PLS -> dollar rate is found the same way. */
 async function liveRefresh(seq){
   const h = S.hold; if (!h.coins || seq !== h.seq) return;
   const W = CONFIG.WPLS.toLowerCase(), cfg = CONFIG.holdings;
@@ -1535,39 +1536,49 @@ async function liveRefresh(seq){
   h.refining = true; renderHoldings();
   try {
     const usdc = CONFIG.tokens.find(t => t.symbol === "USDC");
-    const jobs = [], owner = [], amts = new Map();
-    // one reference quote: 1,000 PLS -> bridged USDC, for the dollar figure
-    const onePls = 1000n * 10n ** 18n;
-    for (const r of CONFIG.routers) for (const p of [[CONFIG.WPLS, usdc.address], ...CONFIG.hops.filter(x => !eq(x, W) && !eq(x, usdc.address)).map(x => [CONFIG.WPLS, x, usdc.address])]) { jobs.push({ router: r, path: p, amt: onePls }); owner.push("$usd"); }
+    // how many PLS make up the route-picking trade size (index rate as a starting guess)
+    const plsForTrade = IDX.usdPerPls ? cfg.livePriceUsd / IDX.usdPerPls : 1e6;
+    const hubs = CONFIG.hops.filter(x => !eq(x, W));
+    const jobs = [], owner = [], sized = new Map();
+    const addPaths = (key, from, to, amt) => {
+      const paths = [[from, to], ...hubs.filter(x => !eq(x, from) && !eq(x, to)).map(x => [from, x, to])];
+      for (const r of CONFIG.routers) for (const p of paths) { jobs.push({ router: r, path: p, amt }); owner.push(key); }
+      if (IDX.graphs) for (const [ri, G] of IDX.graphs) for (const p of searchGraph(G, from, to, amt, CONFIG.index.maxStops + 1, 2, 4)) { jobs.push({ router: CONFIG.routers[ri], path: p, amt }); owner.push(key); }
+    };
+    // PLS -> bridged USDC, for the dollar rate
+    const plsAmt = toRaw(plsForTrade.toFixed(6), 18);
+    if (usdc) { sized.set("$usd", { amt: plsAmt, one: 10n ** 18n, dec: 18, outDec: usdc.decimals }); addPaths("$usd", CONFIG.WPLS, usdc.address, plsAmt); }
+    // each coin -> WPLS
     for (const [a, dec] of toks) {
-      // price = what exactly 1 coin sells for, so the price isn't dragged down by slippage.
-      // Backup: coins where 1 coin is too small to quote are priced with about 1,000 PLS worth instead.
-      const one = 10n ** BigInt(dec);
-      const px = IDX.price?.get(a);
-      const wholeB = px ? cfg.livePricePls / px : 1;
-      const backup = toRaw(wholeB.toFixed(Math.min(dec, 12)), dec) || one;
-      amts.set(a, { amt: one, whole: 1 });
-      amts.set(a + "#b", { amt: backup, whole: Number(ethers.formatUnits(backup, dec)) });
-      const paths = [[a, CONFIG.WPLS], ...CONFIG.hops.filter(x => !eq(x, W) && !eq(x, a)).map(x => [a, x, CONFIG.WPLS])];
-      const graphPaths = IDX.graphs ? [...IDX.graphs].flatMap(([ri, G]) => searchGraph(G, a, W, one, CONFIG.index.maxStops + 1, 2, 4).map(p => [ri, p])) : [];
-      for (const [key, amt] of [[a, one], [a + "#b", backup]]) {
-        for (const r of CONFIG.routers) for (const p of paths) { jobs.push({ router: r, path: p, amt }); owner.push(key); }
-        for (const [ri, p] of graphPaths) { jobs.push({ router: CONFIG.routers[ri], path: p, amt }); owner.push(key); }
-      }
+      const one = 10n ** BigInt(dec), px = IDX.price?.get(a);
+      const amt = px ? (toRaw((plsForTrade / px).toFixed(Math.min(dec, 12)), dec) || one) : one;
+      sized.set(a, { amt, one, dec, outDec: 18 });
+      addPaths(a, a, CONFIG.WPLS, amt);
     }
+    // step 1: best route for a meaningful trade
     const res = await multiBig(jobs.map(j => ({ target: j.router.address, iface: routerIface, fn: "getAmountsOut", args: [j.amt, j.path] })));
     if (seq !== h.seq) return;
-    const best = new Map();
-    res.forEach((r, i) => { const a = r?.[0]; const o = a && a.length ? a[a.length - 1] : null; if (o && o > 0n && (!best.has(owner[i]) || o > best.get(owner[i]))) best.set(owner[i], o); });
-    const usdPerPls = best.has("$usd") && usdc ? Number(ethers.formatUnits(best.get("$usd"), usdc.decimals)) / 1000 : IDX.usdPerPls;
-    const plsEach = new Map([[W, 1]]);                     // PLS per whole coin, live
-    for (const [key, { whole }] of amts) {
-      if (key.endsWith("#b")) continue;
-      const a = key, bk = a + "#b";
-      const oneOut = best.get(a), bOut = best.get(bk);
-      if (oneOut && oneOut > 0n) plsEach.set(a, Number(ethers.formatUnits(oneOut, 18)) / whole);        // 1-coin price
-      else if (bOut && bOut > 0n && amts.get(bk).whole > 0) plsEach.set(a, Number(ethers.formatUnits(bOut, 18)) / amts.get(bk).whole);
+    const best = new Map(), route = new Map();
+    res.forEach((r, i) => { const x = r?.[0]; const o = x && x.length ? x[x.length - 1] : null;
+      if (o && o > 0n && (!best.has(owner[i]) || o > best.get(owner[i]))) { best.set(owner[i], o); route.set(owner[i], jobs[i]); } });
+    // step 2: 1 coin (or less, when 1 coin is worth more than the trade size) on that route
+    const spotJobs = [], spotKeys = [];
+    for (const [k, { amt, one }] of sized) {
+      const j = route.get(k); if (!j) continue;
+      const small = one < amt ? one : (amt / 100n > 0n ? amt / 100n : amt);
+      spotJobs.push({ router: j.router, path: j.path, amt: small }); spotKeys.push(k);
     }
+    const spot = await quoteMany(spotJobs);
+    if (seq !== h.seq) return;
+    const rate = new Map();   // output per whole input coin (PLS per coin; dollars per PLS for "$usd")
+    spotKeys.forEach((k, i) => {
+      const { amt, dec, outDec } = sized.get(k), o = spot[i];
+      if (o && o > 0n) rate.set(k, Number(ethers.formatUnits(o, outDec)) / Number(ethers.formatUnits(spotJobs[i].amt, dec)));
+      else rate.set(k, Number(ethers.formatUnits(best.get(k), outDec)) / Number(ethers.formatUnits(amt, dec)));   // 1 coin too small to quote
+    });
+    const usdPerPls = rate.get("$usd") ?? IDX.usdPerPls;
+    const plsEach = new Map([[W, 1]]);
+    for (const [k, v] of rate) if (k !== "$usd") plsEach.set(k, v);
     const valueOf = (a, bal, dec) => { const k = (a === "native" ? W : a.toLowerCase()); const e = plsEach.get(k); return e == null ? null : Number(ethers.formatUnits(bal, dec)) * e; };
     for (const c of h.coins) {
       const v = valueOf(c.address, c.bal, c.tok.decimals ?? 18);
