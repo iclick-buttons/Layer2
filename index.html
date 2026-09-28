@@ -930,18 +930,39 @@ async function buyRouteFor(A){
   let best = null; outs.forEach((o, i) => { if (o && o > 0n && (!best || o > best.o)) best = { o, router: jobs[i].router, path: jobs[i].path }; });
   buyCache.set(k, best); return best;
 }
+// one simulated run: buys `A` with test PLS, then tries each route; returns [got, ok[], expected[], outs[]]
+async function runTester(A, buy, jobs){
+  const cfg = CONFIG.testRun, W = CONFIG.WPLS;
+  const data = rtIface.encodeFunctionData("testMany", [W, buy.router.address, buy.path, cfg.plsIn, jobs]);
+  const raw = await read.send("eth_call", [{ from: cfg.caller, to: cfg.helper, data, gas: "0x" + cfg.gas.toString(16) }, "latest",
+    { [cfg.helper]: { code: RT_CODE, balance: "0x" + (cfg.plsIn * 2n).toString(16) } }]);
+  return rtIface.decodeFunctionResult("testMany", raw);
+}
+/* Self-check: WPLS -> PLSX directly on PulseX V2 must always work. If even that "fails", the price server
+   isn't running test-runs properly (for example it limits their computing budget), so test-run results
+   can't be trusted and are ignored for the rest of the visit. Checked once, only when something fails. */
+let testerOk = null;
+async function testerWorks(){
+  if (testerOk !== null) return testerOk;
+  try {
+    const W = CONFIG.WPLS, plsx = CONFIG.tokens.find(t => t.symbol === "PLSX").address;
+    const [got, ok, expected] = await runTester(W, { router: CONFIG.routers[0], path: [] }, [[CONFIG.routers[0].address, [W, plsx]]]);
+    testerOk = got > 0n && ok[0] && expected[0] > 0n;
+  } catch { testerOk = false; }
+  if (!testerOk) console.warn("Route test-runs don't work on this price server; ignoring their results.");
+  return testerOk;
+}
 async function testRoutes(A, results){
   const cfg = CONFIG.testRun, info = { ran: false, failed: [], tested: 0 };
-  if (!cfg?.enabled || !results.length) return { results, info };
+  if (!cfg?.enabled || !results.length || testerOk === false) return { results, info };
   const W = CONFIG.WPLS, cands = results.slice(0, cfg.candidates);
   let buy = { router: CONFIG.routers[0], path: [] };
   if (!eq(A, W)) { buy = await buyRouteFor(A); if (!buy) return { results, info }; }
   try {
-    const data = rtIface.encodeFunctionData("testMany", [W, buy.router.address, buy.path, cfg.plsIn, cands.map(r => [r.router.address, r.path])]);
-    const raw = await read.send("eth_call", [{ from: cfg.caller, to: cfg.helper, data, gas: "0x" + cfg.gas.toString(16) }, "latest",
-      { [cfg.helper]: { code: RT_CODE, balance: "0x" + (cfg.plsIn * 2n).toString(16) } }]);
-    const [got, ok, expected, outs] = rtIface.decodeFunctionResult("testMany", raw);
+    const [got, ok, expected, outs] = await runTester(A, buy, cands.map(r => [r.router.address, r.path]));
     if (got === 0n) return { results, info };
+    // any failure is only trusted once the self-check has passed
+    if (cands.some((r, i) => !ok[i] || expected[i] === 0n) && !(await testerWorks())) return { results, info };
     info.ran = true; info.tested = cands.length;
     cands.forEach((r, i) => {
       r.tested = true;
@@ -1216,7 +1237,8 @@ function render(){
     $("rateLine").textContent = ""; $("details").classList.remove("show");
     // every route failed: the coin they all share is the one being sold (buying it for the test worked, selling it didn't)
     if (S.impactNote && !S.quoting) impactWarn = `<div class="warnbox b">Every route would move the price by more than ${CONFIG.maxImpactPct}%${S.impactNote.minImpact != null ? ` (the best is ${S.impactNote.minImpact.toFixed(1)}%)` : ""}, so none is suggested. The pools for this pair are too thin for this amount. Try a smaller amount.</div>`;
-    if (S.quoteNote && !S.quoting) impactWarn = `<div class="warnbox b">Every route failed its test run. <b>${esc(S.from.symbol)}</b> could be bought but not sold into any PulseX pool, so it likely blocks sales${S.to.address === "native" || isHub(pathAddr(S.to)) ? "" : ` (or <b>${esc(S.to.symbol)}</b> blocks buying)`}. This swap would fail.</div>`;
+    if (S.quoteNote && !S.quoting) { const fromMain = S.from.address === "native" || isMain(pathAddr(S.from)), toMain = S.to.address === "native" || isMain(pathAddr(S.to));
+      impactWarn = `<div class="warnbox b">Every route failed its test run. ${fromMain && !toMain ? `<b>${esc(S.to.symbol)}</b> likely blocks buying or transfers.` : !fromMain ? `<b>${esc(S.from.symbol)}</b> could be bought but not sold into any PulseX pool, so it likely blocks sales${toMain ? "" : ` (or <b>${esc(S.to.symbol)}</b> blocks buying)`}.` : "PulseX didn't accept any route for this pair."} This swap would fail.</div>`; }
   }
   const fb = holdBal(S.from);
   $("fromBal").innerHTML = fb != null ? `Balance ${fmt(fb, S.from.decimals, 4)}${fb > 0n ? '<button class="max" id="maxBtn">MAX</button>' : ""}` : "";
