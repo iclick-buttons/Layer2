@@ -660,9 +660,13 @@ document.addEventListener("error", e => {
 }, true);
 // copy-the-contract-address chip (a span, so it can sit inside other clickable rows)
 function caChip(t, iconOnly){
-  if (!t || t.address === "native" || !ethers.isAddress(t.address)) return "";
-  const a = ethers.getAddress(t.address);
-  return `<span class="ca-btn${iconOnly ? " ca-icon" : ""}" role="button" tabindex="0" data-ca="${a}" data-sym="${esc(t.symbol)}" title="Copy contract address ${a}" aria-label="Copy ${esc(t.symbol)} contract address">${iconOnly ? "" : `<span class="addr">${short(a)}</span>`}<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="1"/><path d="M5 15V4a1 1 0 0 1 1-1h11"/></svg></span>`;
+  if (!t) return "";
+  // PLS is the native coin and has no contract; PulseX uses WPLS for it, so PLS copies the WPLS address, labelled as such
+  const native = t.address === "native";
+  if (!native && !ethers.isAddress(t.address)) return "";
+  const a = ethers.getAddress(native ? CONFIG.WPLS : t.address), sym = native ? "WPLS" : t.symbol;
+  const tip = native ? `PLS has no contract address (it's the native coin). This copies WPLS, which PulseX uses for PLS: ${a}` : `Copy contract address ${a}`;
+  return `<span class="ca-btn${iconOnly ? " ca-icon" : ""}" role="button" tabindex="0" data-ca="${a}" data-sym="${esc(sym)}" title="${esc(tip)}" aria-label="Copy ${esc(sym)} contract address">${iconOnly ? "" : `<span class="addr">${native ? "WPLS " : ""}${short(a)}</span>`}<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="1"/><path d="M5 15V4a1 1 0 0 1 1-1h11"/></svg></span>`;
 }
 async function copyText(text){
   try { await navigator.clipboard.writeText(text); return true; } catch {}
@@ -1055,11 +1059,13 @@ function renderPicker(){
   // coins in the looked-up wallet come first, biggest value first, with their balance
   const held = new Map((S.hold.coins || []).filter(c => !isHidden(c) && !(c.address !== "native" && c.usd != null && c.usd < CONFIG.prices.minShowUsd)).map(c => [(c.address === "native" ? "native" : c.address.toLowerCase()), c]));
   const hc = t => held.get(t.address === "native" ? "native" : t.address.toLowerCase());
-  const list = S.tokens.filter(match).sort((x, y) => { const a = hc(x), b = hc(y); return (!!b - !!a) || ((b?.usd ?? -1) - (a?.usd ?? -1)); });
-  const walletCount = list.filter(hc).length;
-  $("tokList").innerHTML = list.map((t, i) => { const c = hc(t);
-    return `${i === 0 && walletCount ? '<div class="pick-hd">In your wallet</div>' : ""}${i === walletCount && walletCount ? '<div class="pick-hd">Other coins</div>' : ""}<button class="tok-item ${t.address === other.address ? "sel" : ""}" data-addr="${esc(t.address)}">
-      ${icon(t, 34)}<span style="flex:1;min-width:0"><div class="sym" style="font-weight:600">${esc(t.symbol)}${t.custom ? '<span class="tag">IMPORTED</span>' : ""}</div><div style="font-size:12px;color:var(--dim)">${esc(t.name)}${t.address !== "native" ? ` <span class="addr ca-txt">${short(t.address)}</span>` : ""}</div></span>${c ? `<span class="pick-bal"><b class="num">${fmt(c.bal, t.decimals, 4)}</b>${c.usd != null ? `<span>${usd(c.usd)}</span>` : ""}</span>` : ""}${t.address !== "native" ? caChip(t, true) : '<span class="ca-sp"></span>'}</button>`; }).join("")
+  const mainIdx = t => CONFIG.tokens.findIndex(m => m.address.toLowerCase() === t.address.toLowerCase());
+  const group = t => mainIdx(t) >= 0 ? 0 : hc(t) ? 1 : 2;          // 0 main coins, 1 rest of wallet, 2 everything else
+  const list = S.tokens.filter(match).sort((x, y) => (group(x) - group(y)) || (group(x) === 0 ? mainIdx(x) - mainIdx(y) : group(x) === 1 ? ((hc(y)?.usd ?? -1) - (hc(x)?.usd ?? -1)) : 0));
+  const heads = ["Main coins", "In your wallet", "Other coins"];
+  $("tokList").innerHTML = list.map((t, i) => { const c = hc(t), g = group(t);
+    return `${i === 0 || group(list[i - 1]) !== g ? `<div class="pick-hd">${heads[g]}</div>` : ""}<button class="tok-item ${t.address === other.address ? "sel" : ""}" data-addr="${esc(t.address)}">
+      ${icon(t, 34)}<span style="flex:1;min-width:0"><div class="sym" style="font-weight:600">${esc(t.symbol)}${t.custom ? '<span class="tag">IMPORTED</span>' : ""}</div><div style="font-size:12px;color:var(--dim)">${esc(t.name)} <span class="addr ca-txt">${t.address === "native" ? "WPLS " + short(CONFIG.WPLS) : short(t.address)}</span></div></span>${c ? `<span class="pick-bal"><b class="num">${fmt(c.bal, t.decimals, 4)}</b>${c.usd != null ? `<span>${usd(c.usd)}</span>` : ""}</span>` : ""}${caChip(t, true)}</button>`; }).join("")
     || '<div class="empty">No match. Paste a token contract address to import it.</div>';
   $("importBox").innerHTML = "";
   if (ethers.isAddress(q) && !findTok(q)) lookupToken(q);
@@ -1123,7 +1129,7 @@ async function loadPair(){
 function renderPool(){
   const A = S.lpA, B = S.lpB, p = S.lpPair, r = CONFIG.routers[S.lpVer];
   $("lpABtn").innerHTML = tokBtnHTML(A); $("lpBBtn").innerHTML = tokBtnHTML(B);
-  $("lpCas").innerHTML = [A, B].filter(t => t.address !== "native").map(t => `<span class="pool-ca">${esc(t.symbol)} ${caChip(t)}</span>`).join("");
+  $("lpCas").innerHTML = [A, B].map(t => `<span class="pool-ca">${esc(t.symbol)} ${caChip(t)}</span>`).join("");
   document.querySelectorAll("#verSeg button").forEach(b => b.classList.toggle("on", +b.dataset.v === S.lpVer));
   const same = eq(pathAddr(A), pathAddr(B));
   let info = "";
@@ -1679,9 +1685,9 @@ function renderHoldings(){
   $("holdTotal").innerHTML = parts.length ? `<span class="num">${usd(tot)}</span> across ${parts.join(" and ")}` : "";
   const row = (c, hidden) => `<div class="hold-row${hidden ? " is-hidden" : ""}" data-i="${h.coins.indexOf(c)}" role="button" tabindex="0">
       ${icon(c.tok, 30)}
-      <span class="grow"><span class="sym">${esc(c.tok.symbol)}${c.tok.found ? '<span class="tag">FOUND</span>' : ""}</span><span class="nm">${esc(c.tok.name)}${c.address === "native" ? "" : ` <span class="addr ca-txt">${short(c.tok.address)}</span>`}</span></span>
+      <span class="grow"><span class="sym">${esc(c.tok.symbol)}${c.tok.found ? '<span class="tag">FOUND</span>' : ""}</span><span class="nm">${esc(c.tok.name)} <span class="addr ca-txt">${c.address === "native" ? "WPLS " + short(CONFIG.WPLS) : short(c.tok.address)}</span></span></span>
       <span class="hv"><b class="num">${fmt(c.bal, c.tok.decimals, 4)}</b><span>${c.usd != null ? `${usd(c.usd)} <span class="each">· ${each(c)} each</span>${c.priceSrc && c.priceSrc !== PRICE_SOURCES[CONFIG.prices.source].label ? ` <span class="src-tag" title="Not listed on ${esc(PRICE_SOURCES[CONFIG.prices.source].label)}, so this price comes from the backup (${esc(c.priceSrc)}'s own index)">${esc(c.priceSrc)} price</span>` : ""}` : "no price"}</span></span>
-      ${c.address === "native" ? '<span class="ca-sp"></span>' : caChip(c.tok, true)}
+      ${caChip(c.tok, true)}
       ${c.address === "native" ? '<span class="hide-sp"></span>' : `<button type="button" class="hide-btn" data-hide="${esc(c.address)}" data-on="${hidden ? 0 : 1}" title="${hidden ? "Show this coin again" : "Hide this coin from holdings"}" aria-label="${hidden ? "Unhide" : "Hide"} ${esc(c.tok.symbol)}">${hidden ? "Unhide" : "×"}</button>`}
     </div>`;
   box.innerHTML = (list.length ? list.map(c => row(c, false)).join("") : '<div class="empty">No priced coins found in this wallet.</div>')
