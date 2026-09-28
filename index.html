@@ -149,6 +149,9 @@
   .hv{display:flex;flex-direction:column;align-items:flex-end;font-size:12px;color:var(--mute)}
   .hv b{font-size:15px;color:var(--ink);font-weight:500}
   .junk{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--mute);margin-top:10px}
+  .lp-mode{width:100%;margin-top:14px}
+  .lp-mode button{flex:1;padding:9px 12px;font-size:14px;font-weight:600}
+  .lp-mode + .main-btn{margin-top:8px}
   .pair{display:flex;flex:none}
   .pair .tok-ico + .tok-ico{margin-left:-4px}
   .pill{font:600 10px/1 var(--display);letter-spacing:.05em;padding:2px 5px;margin-left:4px;color:#c4b5fd;border:1px solid rgba(196,181,253,.35);vertical-align:2px}
@@ -352,7 +355,9 @@
         <div class="pool-pick"><button class="tok-btn" id="lpABtn"></button><span class="plus">+</span><button class="tok-btn" id="lpBBtn"></button></div>
       </div>
       <div id="lpInfo"></div>
+      <div class="seg lp-mode" id="lpModeSeg" role="group" aria-label="Add or remove liquidity"><button data-m="add" class="on">Add liquidity</button><button data-m="remove">Remove liquidity</button></div>
       <a class="btn-grad main-btn off" id="lpBtn" target="_blank" rel="noopener noreferrer">Add liquidity on PulseX ↗</a>
+      <div id="lpModeNote"></div>
       <div class="handoff-note">Add and Remove open PulseX with the pool selected; you connect your wallet there.</div>
       <div id="lpPositions"></div>
     </div>
@@ -618,10 +623,10 @@ function swapLink(a, b){
   if (pxToken(b)) q.outputCurrency = pxToken(b);
   return pxUrl("/swap", q);
 }
-function addLink(a, b){
-  const seg = t => t.address === "native" ? "PLS" : t.address;
-  return pxUrl(`/add/${seg(a)}/${seg(b)}`);
-}
+// PulseX's own page addresses (read from its app): add pages carry the version, remove pages don't.
+const pxId = t => t.address === "native" || eq(t.address, CONFIG.WPLS) ? "PLS" : ethers.getAddress(t.address);
+function addLink(a, b, ver = S.lpVer){ return pxUrl(`/add/${CONFIG.routers[ver].label.endsWith("V1") ? "V1" : "V2"}/${pxId(a)}/${pxId(b)}`); }
+function removeLink(a, b){ return pxUrl(`/remove/${pxId(a)}/${pxId(b)}`); }
 
 /* batched reads through Multicall3 */
 async function multi(calls){
@@ -940,6 +945,8 @@ async function lookupToken(addr){
 }
 
 /* ---------- pools (view only) ---------- */
+S.lpAction = "add";
+$("lpModeSeg").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; S.lpAction = b.dataset.m; renderPool(); });
 $("verSeg").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; S.lpVer = +b.dataset.v; loadPair(); });
 async function loadPair(){
   const A = pathAddr(S.lpA), B = pathAddr(S.lpB), r = CONFIG.routers[S.lpVer], seq = ++S.lpSeq;
@@ -979,10 +986,14 @@ function renderPool(){
   }
   $("lpInfo").innerHTML = info;
   renderRoute();
-  const btn = $("lpBtn");
-  btn.classList.toggle("off", same);
-  btn.href = same ? "#" : addLink(A, B);
-  btn.textContent = p && !p.error && !p.exists && !same ? "Create this pool on PulseX ↗" : "Add liquidity on PulseX ↗";
+  const btn = $("lpBtn"), rm = S.lpAction === "remove", ver = CONFIG.routers[S.lpVer].label.replace("PulseX ", "");
+  document.querySelectorAll("#lpModeSeg button").forEach(b => b.classList.toggle("on", b.dataset.m === S.lpAction));
+  const noPool = p && !p.error && !p.exists;
+  const off = same || (rm && noPool);
+  btn.classList.toggle("off", off);
+  btn.href = off ? "#" : rm ? removeLink(A, B) : addLink(A, B);
+  btn.textContent = same ? "Pick two different tokens" : rm ? (noPool ? "No pool to remove from" : `Remove ${ver} liquidity on PulseX ↗`) : noPool ? `Create this ${ver} pool on PulseX ↗` : `Add ${ver} liquidity on PulseX ↗`;
+  $("lpModeNote").innerHTML = rm && !off && ver === "V1" ? '<div class="warnbox w">PulseX opens its Remove page on the version it last used. If it shows V2, switch it to V1 there before removing.</div>' : "";
 }
 
 /* tabs */
@@ -1364,14 +1375,13 @@ async function splitPositions(held){
   positions.sort((x, y) => (y.usd ?? -1) - (x.usd ?? -1));
   return { positions, rest };
 }
-function removeLink(a, b){ return pxUrl(`/remove/${a}/${b}`); }
 function posRow(p, i, where){
   const t0 = lpTok(p.a0), t1 = lpTok(p.a1);
   return `<div class="hold-row lp-row" data-pos="${i}" data-where="${where}" role="button" tabindex="0">
     <span class="pair">${icon(t0, 26)}${icon(t1, 26)}</span>
     <span class="grow"><span class="sym">${esc(t0.symbol)} / ${esc(t1.symbol)} <span class="pill">${esc(p.router.label.replace("PulseX ", ""))}</span></span>
       <span class="nm">${fmt(p.amt0, t0.decimals, 4)} ${esc(t0.symbol)} + ${fmt(p.amt1, t1.decimals, 4)} ${esc(t1.symbol)} · ${p.share < 0.01 ? "<0.01" : p.share.toFixed(2)}% of pool</span></span>
-    <span class="hv"><b class="num">${p.usd != null ? usd(p.usd) : "—"}</b>${where === "pools" ? `<span class="lp-acts"><a href="${addLink(tokOrPls(p.a0), tokOrPls(p.a1))}" target="_blank" rel="noopener noreferrer">Add ↗</a><a href="${removeLink(p.a0, p.a1)}" target="_blank" rel="noopener noreferrer">Remove ↗</a></span>` : ""}</span>
+    <span class="hv"><b class="num">${p.usd != null ? usd(p.usd) : "—"}</b>${where === "pools" ? `<span class="lp-acts"><a href="${addLink(tokOrPls(p.a0), tokOrPls(p.a1), p.ri)}" target="_blank" rel="noopener noreferrer">Add ↗</a><a href="${removeLink(tokOrPls(p.a0), tokOrPls(p.a1))}" target="_blank" rel="noopener noreferrer"${p.ri === 1 ? ' title="PulseX opens Remove on the version it last used. Switch it to V1 there if needed."' : ""}>Remove ↗</a></span>` : ""}</span>
   </div>`;
 }
 const tokOrPls = a => eq(a, CONFIG.WPLS) ? findTok("native") : lpTok(a);
