@@ -52,7 +52,7 @@
   header{position:relative;z-index:2;display:flex;align-items:center;gap:18px;padding:22px 36px;max-width:1360px;margin:0 auto}
   .brand{display:flex;align-items:center;gap:12px;font-family:var(--display);font-weight:600;font-size:22px;letter-spacing:.04em}
   .mark{width:30px;height:30px;flex:none}
-  .status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mute);margin-left:auto}
+  .status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mute)}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
   .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(77,255,176,.15),0 0 12px var(--ok)}
   .dot.bad{background:var(--bad);box-shadow:0 0 12px var(--bad)}
@@ -193,7 +193,7 @@
 
   /* ---------- lower band: plain info, no boxes ---------- */
   .band{position:relative;z-index:1;max-width:1360px;margin:0 auto;padding:26px 36px 20px;border-top:1px solid var(--line);
-    display:grid;grid-template-columns:1.1fr 1.2fr 1.2fr 1fr;gap:36px}
+    display:grid;grid-template-columns:1.2fr 1.2fr 1fr;gap:36px}
   .band h3{font-family:var(--display);font-size:15px;font-weight:600;letter-spacing:.05em;color:var(--ink);margin-bottom:10px}
   .band p,.band li{font-size:13px;color:var(--mute);line-height:1.6}
   .trust li{list-style:none;padding-left:16px;position:relative;margin-bottom:6px}
@@ -205,8 +205,14 @@
   .notice strong{display:block;font-size:14px;color:var(--ink);font-weight:600}
   .notice p{margin-top:2px}
   .notice .when{font-size:12px;color:var(--faint);margin-top:2px;font-family:var(--display);letter-spacing:.03em}
-  #targetCard{margin-top:22px}
-  #targetNote{padding:8px 0 0}
+  .trade-on{position:relative;display:flex;align-items:center;gap:10px;margin-left:auto;padding:6px 6px 6px 14px;border:1px solid var(--line2);background:rgba(15,23,64,.7)}
+  .trade-on .lbl{font:600 13px/1 var(--display);letter-spacing:.05em;color:var(--mute);white-space:nowrap}
+  .trade-on .seg{border-color:var(--line2)}
+  .trade-on .seg button{padding:8px 14px;font-size:14px;font-weight:600;white-space:nowrap}
+  .trade-on .seg button.on{background:var(--ion);color:#04121a}
+  #targetNote{position:absolute;right:0;top:calc(100% + 5px);font-size:12px;line-height:1.3;color:var(--warn);white-space:nowrap}
+  #targetNote:empty{display:none}
+  .status{margin-left:0}
 
   .row{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
   .row:last-child{border-bottom:0}
@@ -250,7 +256,18 @@
     .map{min-height:0}
     .band{grid-template-columns:1fr 1fr;max-width:640px}
   }
+  @media (max-width:900px){
+    header{flex-wrap:wrap}
+    .trade-on{order:5;width:100%;margin:6px 0 0;justify-content:space-between}
+    .trade-on .seg{flex:1;max-width:420px}
+    .trade-on .seg button{flex:1}
+    #targetNote{position:static;flex-basis:100%;white-space:normal}
+    .trade-on{flex-wrap:wrap}
+    .status{margin-left:auto}
+  }
   @media (max-width:560px){
+    .trade-on{flex-direction:column;align-items:stretch;gap:8px;padding:10px}
+    .trade-on .seg{max-width:none}
     header{padding:16px}
     .brand span{font-size:19px}
     .status span:last-child{display:none}
@@ -271,6 +288,11 @@
   <div class="brand">
     <svg class="mark" viewBox="0 0 30 30" aria-hidden="true"><path d="M4 22 L12 8 L18 18 L26 6" fill="none" stroke="#46e6ff" stroke-width="2.4" stroke-linejoin="round"/><circle cx="4" cy="22" r="2.6" fill="#ff47c8"/><circle cx="26" cy="6" r="2.6" fill="#46e6ff"/></svg>
     <span id="appName">Layer2</span>
+  </div>
+  <div class="trade-on" id="targetCard" role="group" aria-labelledby="tradeOnLbl">
+    <span class="lbl" id="tradeOnLbl">Trade on PulseX</span>
+    <div class="seg" id="targetSeg"><button data-t="online">Online</button><button data-t="local">This computer</button></div>
+    <div id="targetNote"></div>
   </div>
   <div class="status" title="Price feed status"><span class="dot" id="netDot"></span><span id="netLabel">PulseChain</span></div>
   <a class="btn-grad btn-ghost-hd" id="openPulsex" target="_blank" rel="noopener noreferrer">Open PulseX ↗</a>
@@ -370,10 +392,6 @@
 
 <section class="band">
   <div>
-    <h3>Updates</h3>
-    <div id="notices"></div>
-  </div>
-  <div>
     <h3>No wallet connection</h3>
     <ul class="trust">
       <li>This page never connects to your wallet and can never move anything. If you look up an address under Holdings, it only reads that address's public balances.</li>
@@ -389,11 +407,6 @@
       <li>Press "Continue on PulseX". PulseX opens in a new tab with the same tokens selected.</li>
       <li>Connect your wallet on PulseX, check its quote, and confirm there.</li>
     </ol>
-    <div id="targetCard">
-      <h3>Where to trade</h3>
-      <div class="seg" id="targetSeg"><button data-t="online">Online PulseX</button><button data-t="local">PulseX on my computer</button></div>
-      <div class="empty" id="targetNote"></div>
-    </div>
   </div>
   <div>
     <h3>Contracts read</h3>
@@ -509,10 +522,6 @@ const CONFIG = {
     cacheMinutes: 15,
   },
   multicall: "0xcA11bde05977b3631167028862bE2a173976CA11",
-
-  notices: [
-    { title: "Welcome", body: "Compare PulseX prices and routes here, then trade on PulseX. No wallet connection needed on this page.", when: "Sep 2026" },
-  ],
 };
 
 /* ===================================================================== */
@@ -1041,7 +1050,6 @@ function render(){
   mb.setAttribute("aria-disabled", String(!ok));
 }
 function renderStatic(){
-  $("notices").innerHTML = CONFIG.notices.map(n => `<div class="notice"><strong>${esc(n.title)}</strong><p>${esc(n.body)}</p>${n.when ? `<div class="when">${esc(n.when)}</div>` : ""}</div>`).join("") || '<div class="empty">No updates yet.</div>';
   const c = [...CONFIG.routers.flatMap(r => [[r.label + " router", r.address], [r.label + " factory", r.factory]]), ["Multicall3", CONFIG.multicall]];
   $("contracts").innerHTML = c.map(([l, a]) => `<div class="row"><div class="grow"><div class="sym" style="font-size:13px">${esc(l)}</div></div><a class="addr" href="${CONFIG.explorer}/address/${a}" target="_blank" rel="noopener noreferrer">${short(a)} ↗</a></div>`).join("");
 }
@@ -1395,8 +1403,9 @@ function renderTarget(){
   const local = S.target === "local";
   $("targetName").textContent = local ? "your local PulseX app" : "PulseX";
   $("targetNote").innerHTML = local
-    ? `Buttons open <span class="addr">${esc(CONFIG.pulsexLocal.replace(/^https?:\/\//, ""))}</span>. Start pulsex-server.exe first, or the link won't load. Only use a copy downloaded from PulseChain's official GitLab.`
-    : "Buttons open the online PulseX app. If you run pulsex-server.exe on this computer, switch to it here.";
+    ? `Start pulsex-server.exe first. Opens <span class="addr">${esc(CONFIG.pulsexLocal.replace(/^https?:\/\//, ""))}</span>`
+    : "";
+  $("targetSeg").title = "Where the PulseX buttons open: the online app, or pulsex-server.exe running on this computer (use only the copy from PulseChain's official GitLab).";
 }
 $("targetSeg").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
