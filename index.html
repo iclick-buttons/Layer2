@@ -553,6 +553,11 @@ const CONFIG = {
     maxStops: 3,           // coins in between (3 stops = 4 pools)
     keepPerCoin: 3,        // search width: best ways kept into each coin at every step
     candidates: 40,        // most promising routes per version that get an exact on-chain price
+    // Which coins may be used as stops in the middle of a route. Main coins always may; any other coin needs
+    // a pool holding at least this much of a main coin, valued from the main coin's real price.
+    minStopDepthUsd: 5000,
+    nonMainEdgePct: 1,     // a route through non-main coins must beat the best main-coin route by this much (unless test-run verified)
+    blockStops: [],        // contract addresses never to route through, e.g. ["0x…"]
     maxPages: 60,          // 1,000 pools per page
     refreshMinutes: 15,
     waitMs: 12000,         // how long a quote waits for the index on first load before using the fallback search
@@ -896,6 +901,28 @@ function searchGraph(G, A, B, amt, maxHops, keep, limit){
   for (const d of done) { const k = d.path.join(); if (seen.has(k)) continue; seen.add(k); outp.push(d.path); if (outp.length >= limit) break; }
   return outp;
 }
+/* Trusted stops: main coins, plus coins with a pool holding real main-coin liquidity. Depth is measured from
+   the main coin's reserve times its real price, not the index's own dollar figure (which a fake coin can inflate). */
+let trust = { at: -1, set: null };
+async function trustedStops(){
+  if (trust.set && trust.at === IDX.at) return trust.set;
+  const set = new Set(CONFIG.hops.map(h => h.toLowerCase()));
+  if (IDX.plist) {
+    const mains = [...set];
+    const px = await getPrices(mains).catch(() => new Map());
+    const usdOf = a => px.get(a)?.usd;
+    const depth = new Map();
+    for (const p of IDX.plist) for (const [coin, main, r] of [[p.a, p.b, p.rb], [p.b, p.a, p.ra]]) {
+      if (set.has(coin) || !set.has(main)) continue;
+      const u = usdOf(main); if (u == null) continue;
+      const d = r * u; if (d > (depth.get(coin) || 0)) depth.set(coin, d);
+    }
+    for (const [coin, d] of depth) if (d >= CONFIG.index.minStopDepthUsd) set.add(coin);
+  }
+  for (const b of CONFIG.index.blockStops || []) set.delete(String(b).toLowerCase());
+  trust = { at: IDX.at, set };
+  return set;
+}
 async function indexPaths(A, B, amt){
   const cfg = CONFIG.index;
   const idx = await Promise.race([loadIndex(), new Promise(r => setTimeout(() => r(null), cfg.waitMs))]);
@@ -999,8 +1026,11 @@ async function getQuote(a, b, amt){
   const ix = await indexPaths(A, B, amt);
   // the on-chain pool search is only needed if the index is unavailable or doesn't know one of the coins
   const disc = ix.info.ok && ix.info.inGraph ? { paths: [], info: { searched: [], pools: 0, partial: false } } : await discoveredPaths(A, B);
+  const okStops = await trustedStops();
+  const blocked = new Set((CONFIG.index.blockStops || []).map(x => String(x).toLowerCase()));
+  const stopsOk = p => p.slice(1, -1).every(x => okStops.has(x.toLowerCase()) && !blocked.has(x.toLowerCase()));
   const seen = new Set(), jobs = [];
-  const add = (r, p) => { const k = r.address + p.join().toLowerCase(); if (!seen.has(k)) { seen.add(k); jobs.push({ router: r, path: p, amt }); } };
+  const add = (r, p) => { if (!stopsOk(p)) return; const k = r.address + p.join().toLowerCase(); if (!seen.has(k)) { seen.add(k); jobs.push({ router: r, path: p, amt }); } };
   for (const r of CONFIG.routers) for (const p of [...candidatePaths(a, b), ...disc.paths]) add(r, p);
   for (const [ri, ps] of ix.byRouter) for (const p of ps) add(CONFIG.routers[ri], p);
   const outs = await quoteMany(jobs);
@@ -1021,7 +1051,15 @@ async function getQuote(a, b, amt){
   }
   const t = await testRoutes(A, okImpact);
   if (!t.results.length) return { allFailed: true, test: t.info };
-  const ranked = t.results, best = ranked[0];
+  const ranked = t.results;
+  const mainOnly = r => r.path.slice(1, -1).every(x => isHub(x));
+  if (!mainOnly(ranked[0]) && !ranked[0].tested) {
+    const bm = ranked.find(mainOnly);
+    if (bm && ranked[0].out * 10000n < bm.out * BigInt(10000 + Math.round(CONFIG.index.nonMainEdgePct * 100))) {
+      ranked.splice(ranked.indexOf(bm), 1); ranked.unshift(bm);
+    }
+  }
+  const best = ranked[0];
   const direct = ranked.filter(r => r.path.length === 2).sort((x, y) => (y.out > x.out ? 1 : y.out < x.out ? -1 : 0))[0];
   let gainVsDirect = null, noDirect = false;
   if (!direct) noDirect = true;
